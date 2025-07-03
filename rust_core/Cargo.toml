@@ -1,0 +1,52 @@
+[package]
+name = "rust_core"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "rust_core"
+path = "lib.rs"
+
+[dependencies]
+# Image processing - Rust-first
+image = { workspace = true }
+oxipng = { workspace = true }
+webp = { workspace = true }
+jpeg-encoder = { workspace = true }
+mozjpeg-sys = { workspace = true, optional = true }
+gif = { workspace = true }
+color_quant = { workspace = true }
+imageproc = { workspace = true }
+
+# 3D model formats
+gltf = { workspace = true }
+obj = { workspace = true }
+ply-rs = { workspace = true }
+stl_io = { workspace = true }
+meshopt = { workspace = true }
+
+# Video processing (optional for Windows builds)
+ffmpeg-next = { workspace = true, optional = true }
+mp4parse = { workspace = true }
+
+# Compression
+flate2 = { workspace = true }
+lz4_flex = { workspace = true }
+zstd = { workspace = true }
+
+# Error handling and utilities
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+log = { workspace = true }
+
+[features]
+default = []
+native = ["mozjpeg-sys"]
+video = ["ffmpeg-next"]
+wasm = []
+c_hotspots = []  # Enable C performance hotspots
+
+# Build dependencies for C integration
+[build-dependencies]
+cc = { workspace = true }
+bindgen = { workspace = true }

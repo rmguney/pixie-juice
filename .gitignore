@@ -1,0 +1,112 @@
+# Rust build artifacts
+target/
+Cargo.lock
+
+# C build artifacts
+*.o
+*.a
+*.so
+*.dll
+*.dylib
+*.lib
+*.exp
+*.pdb
+*.exe
+
+# Temporary Rust files
+*.rlib
+*.pdb
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Conda/Mamba environment
+.conda/
+.mamba/
+
+# Node.js (for potential webapp tooling)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# WASM build outputs
+pkg/
+wasm-pack.log
+dist/
+
+# Test outputs and artifacts
+test-output/
+*.tmp
+*.temp
+
+# Backup files
+*.backup
+*.bak
+*_old.*
+*_new.*
+
+# FFmpeg temporary files
+*.ffmpeg_tmp
+
+# Log files
+*.log
+
+# Coverage reports
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# Documentation build
+docs/_build/
+site/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Custom binary names that might be generated
+pxjc
+pxjc.exe
+pixel-squish
+pixel-squish.exe
+
+# Rust-analyzer cache
+.rust-analyzer/
+
+# Dev documentation and planning
+TODO.md
+DESIGN.md

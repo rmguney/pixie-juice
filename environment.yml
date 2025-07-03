@@ -1,0 +1,20 @@
+name: pixel-squish-test
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - pytest>=7.0
+  - pytest-benchmark>=4.0
+  - pillow>=9.0
+  - numpy>=1.21
+  - imageio>=2.19
+  - pip
+  - pip:
+    - pytest-xdist
+    - pytest-cov
+    - pytest-html
+    - pytest-datadir
+    - opencv-python
+    - trimesh
+    - ffmpeg-python

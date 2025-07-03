@@ -1,0 +1,21 @@
+[package]
+name = "cli"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "pxjc"
+path = "src/main.rs"
+
+[dependencies]
+# Workspace dependencies
+rust_core = { path = "../rust_core" }
+clap = { workspace = true }
+indicatif = { workspace = true }
+anyhow = { workspace = true }
+log = { workspace = true }
+
+# Additional CLI-specific dependencies
+env_logger = "0.11"
+tokio = { version = "1.0", features = ["full"] }
+glob = "0.3"
