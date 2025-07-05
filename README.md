@@ -15,7 +15,7 @@ High-performance media processing utility with Rust-first architecture and C per
 - Support for OBJ, PLY, DAE, and glTF formats
 - Mesh decimation algorithms
 
-### Video Processing  (PLanned)
+### Video Processing  (Planned)
 - **Format support** for MP4 and WebM
 - **Compression optimization** with quality/size balance
 - **Frame extraction** and thumbnail generation
@@ -24,15 +24,16 @@ High-performance media processing utility with Rust-first architecture and C per
 - **Resolution scaling** and aspect ratio management
 - **Audio track processing** and optimization
 
-### WASM Web Application (PLanned)
-- **Browser-native processing** - No server uploads required
-- **Cross-platform compatibility** - Works in any modern browser
-- **Progressive Web App (PWA)** - Install locally, work offline
-- **Drag-and-drop interface** - Intuitive file handling
-- **Real-time preview** - See changes before processing
-- **Batch queue management** - Process multiple files sequentially
-- **Settings persistence** - Remember your preferences
-- **Download management** - Organized output with original filenames
+### Next.js Web Application (Production Ready)
+
+- **Modern React architecture** with Next.js 15, React 19, and React Three Fiber
+- **WebAssembly integration** - Rust-powered optimization running in browser
+- **Real-time 3D preview** - Interactive mesh display with Three.js/React Three Fiber
+- **Drag-and-drop interface** - Intuitive file handling with modern UI
+- **Batch processing** - Process multiple images and 3D models simultaneously
+- **Quality controls** - Real-time optimization settings with instant feedback
+- **Download management** - Individual and bulk download options
+- **No server required** - All processing happens client-side
 
 ## Installation
 
@@ -72,13 +73,43 @@ pixie-juice/
 ├── rust_core/          # Core Rust processing logic
 ├── frontend/           # CLI application
 ├── hotspots/           # C performance hotspots
-├── webapp/             # Web application (WASM)
-├── tests/              # Test suite
-└── cli/                # Command-line interface
+├── web/                # Next.js WebAssembly application
+│   ├── src/app/        # React components and pages
+│   ├── pkg/            # Generated WASM bindings
+│   └── public/         # Static assets
+└── tests/              # Test suite
 ```
 
+## Web Application
 
-### Testing
+The modern React-based web application provides a powerful, user-friendly interface for media optimization.
+
+### Development
+
+```bash
+cd web
+npm install
+npm run dev
+```
+
+### Features
+
+- **Drag & Drop Interface**: Simply drag files into the browser window
+- **Real-time 3D Preview**: Interactive mesh visualization with React Three Fiber
+- **Batch Processing**: Optimize multiple files simultaneously
+- **Quality Controls**: Adjust compression settings with real-time feedback
+- **Format Support**: Images (PNG, JPEG, WebP, GIF, BMP, TIFF) and 3D models (OBJ, PLY, STL)
+- **Client-side Processing**: All optimization happens in your browser via WebAssembly
+
+### Deployment
+
+```bash
+cd web
+npm run build
+npm run start
+```
+
+The web app can be deployed to any static hosting service (Vercel, Netlify, GitHub Pages).
 ```bash
 # Run all tests
 cargo test

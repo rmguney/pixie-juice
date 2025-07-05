@@ -58,11 +58,6 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# WASM build outputs
-pkg/
-wasm-pack.log
-dist/
-
 # Test outputs and artifacts
 test-output/
 *.tmp
@@ -110,3 +105,30 @@ pixel-squish.exe
 # Dev documentation and planning
 TODO.md
 DESIGN.md
+
+# Mesh data files
+*.ply
+*.obj
+*.stl
+*.gltf
+*.fbx
+*.dae
+*.glb
+
+# Image files
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.tiff
+*.webp
+
+# Video files
+*.mp4
+*.mkv
+*.avi
+*.mov
+*.wmv
+*.flv
+*.webm

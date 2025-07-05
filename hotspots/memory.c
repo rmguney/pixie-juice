@@ -2,29 +2,164 @@
 #include <stdlib.h>
 #include <string.h>
 
-// TODO: Implement SIMD-optimized memory operations
-// This is a placeholder implementation focusing on the API structure
+#ifdef _MSC_VER
+#include <intrin.h>
+#else
+#include <x86intrin.h>
+#endif
+
+// Feature detection
+static int has_sse = -1;
+static int has_avx = -1;
+
+static void detect_simd_features() {
+    if (has_sse == -1) {
+        int cpuinfo[4];
+#ifdef _MSC_VER
+        __cpuid(cpuinfo, 1);
+#else
+        __builtin_cpu_init();
+        cpuinfo[3] = __builtin_cpu_supports("sse") ? (1 << 25) : 0;
+        cpuinfo[2] = __builtin_cpu_supports("avx") ? (1 << 28) : 0;
+#endif
+        has_sse = (cpuinfo[3] & (1 << 25)) != 0;
+        has_avx = (cpuinfo[2] & (1 << 28)) != 0;
+    }
+}
 
 void memcpy_simd(void* dest, const void* src, size_t size) {
-    // TODO: Use SSE/AVX for large memory copies
-    // This should be significantly faster than standard memcpy for large buffers
-    memcpy(dest, src, size);
+    detect_simd_features();
+    
+    char* d = (char*)dest;
+    const char* s = (const char*)src;
+    
+    // For small sizes, use regular memcpy
+    if (size < 64) {
+        memcpy(dest, src, size);
+        return;
+    }
+    
+    if (has_avx && size >= 32) {
+        // AVX implementation for large copies
+        size_t avx_size = size & ~31; // Round down to multiple of 32
+        
+        for (size_t i = 0; i < avx_size; i += 32) {
+            __m256 data = _mm256_loadu_ps((float*)(s + i));
+            _mm256_storeu_ps((float*)(d + i), data);
+        }
+        
+        // Handle remaining bytes
+        if (size > avx_size) {
+            memcpy(d + avx_size, s + avx_size, size - avx_size);
+        }
+    } else if (has_sse && size >= 16) {
+        // SSE implementation
+        size_t sse_size = size & ~15; // Round down to multiple of 16
+        
+        for (size_t i = 0; i < sse_size; i += 16) {
+            __m128 data = _mm_loadu_ps((float*)(s + i));
+            _mm_storeu_ps((float*)(d + i), data);
+        }
+        
+        // Handle remaining bytes
+        if (size > sse_size) {
+            memcpy(d + sse_size, s + sse_size, size - sse_size);
+        }
+    } else {
+        // Fallback to regular memcpy
+        memcpy(dest, src, size);
+    }
 }
 
 void memset_simd(void* dest, int value, size_t size) {
-    // TODO: Use SSE/AVX for large memory fills
-    memset(dest, value, size);
+    detect_simd_features();
+    
+    char* d = (char*)dest;
+    
+    // For small sizes, use regular memset
+    if (size < 64) {
+        memset(dest, value, size);
+        return;
+    }
+    
+    if (has_avx && size >= 32) {
+        // Create AVX register with repeated value
+        __m256i value_vec = _mm256_set1_epi8((char)value);
+        size_t avx_size = size & ~31;
+        
+        for (size_t i = 0; i < avx_size; i += 32) {
+            _mm256_storeu_si256((__m256i*)(d + i), value_vec);
+        }
+        
+        // Handle remaining bytes
+        if (size > avx_size) {
+            memset(d + avx_size, value, size - avx_size);
+        }
+    } else if (has_sse && size >= 16) {
+        // SSE implementation
+        __m128i value_vec = _mm_set1_epi8((char)value);
+        size_t sse_size = size & ~15;
+        
+        for (size_t i = 0; i < sse_size; i += 16) {
+            _mm_storeu_si128((__m128i*)(d + i), value_vec);
+        }
+        
+        // Handle remaining bytes
+        if (size > sse_size) {
+            memset(d + sse_size, value, size - sse_size);
+        }
+    } else {
+        // Fallback to regular memset
+        memset(dest, value, size);
+    }
 }
 
 void memmove_simd(void* dest, const void* src, size_t size) {
-    // TODO: Use SSE/AVX for overlapping memory moves
+    // For overlapping memory, we need to be careful about direction
+    // Use regular memmove for safety - SIMD optimization here requires
+    // complex overlap detection and direction handling
     memmove(dest, src, size);
 }
 
 int memcmp_fast(const void* ptr1, const void* ptr2, size_t size) {
-    // TODO: Implement optimized comparison with early exit
-    // This should use word-size comparisons and SIMD when possible
-    return memcmp(ptr1, ptr2, size);
+    detect_simd_features();
+    
+    const char* p1 = (const char*)ptr1;
+    const char* p2 = (const char*)ptr2;
+    
+    // For small sizes, use regular memcmp
+    if (size < 32) {
+        return memcmp(ptr1, ptr2, size);
+    }
+    
+    if (has_sse && size >= 16) {
+        size_t sse_size = size & ~15;
+        
+        for (size_t i = 0; i < sse_size; i += 16) {
+            __m128i a = _mm_loadu_si128((const __m128i*)(p1 + i));
+            __m128i b = _mm_loadu_si128((const __m128i*)(p2 + i));
+            __m128i cmp = _mm_cmpeq_epi8(a, b);
+            
+            int mask = _mm_movemask_epi8(cmp);
+            if (mask != 0xFFFF) {
+                // Found difference, fall back to byte-by-byte comparison for this chunk
+                for (size_t j = i; j < i + 16 && j < size; j++) {
+                    if (p1[j] != p2[j]) {
+                        return (unsigned char)p1[j] - (unsigned char)p2[j];
+                    }
+                }
+            }
+        }
+        
+        // Handle remaining bytes
+        if (size > sse_size) {
+            return memcmp(p1 + sse_size, p2 + sse_size, size - sse_size);
+        }
+        
+        return 0;
+    } else {
+        return memcmp(ptr1, ptr2, size);
+    }
 }
 
 MediaAllocator* create_media_allocator(size_t total_size, size_t alignment) {

@@ -23,6 +23,15 @@ pub enum OptError {
     
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
+    
+    #[error("XML error: {0}")]
+    XmlError(String),
+}
+
+impl From<quick_xml::Error> for OptError {
+    fn from(err: quick_xml::Error) -> Self {
+        OptError::XmlError(err.to_string())
+    }
 }
 
 /// Configuration for optimization operations

@@ -10,40 +10,49 @@ path = "lib.rs"
 [dependencies]
 # Image processing - Rust-first
 image = { workspace = true }
-oxipng = { workspace = true }
-webp = { workspace = true }
+oxipng = { workspace = true, optional = true }
+webp = { workspace = true, optional = true }
 jpeg-encoder = { workspace = true }
 mozjpeg-sys = { workspace = true, optional = true }
-gif = { workspace = true }
-color_quant = { workspace = true }
-imageproc = { workspace = true }
+gif = { workspace = true, optional = true }
+color_quant = { workspace = true, optional = true }
+imageproc = { workspace = true, optional = true }
 
 # 3D model formats
-gltf = { workspace = true }
+gltf = { workspace = true, optional = true }
 obj = { workspace = true }
 ply-rs = { workspace = true }
 stl_io = { workspace = true }
-meshopt = { workspace = true }
+meshopt = { workspace = true, optional = true }
+quick-xml = { workspace = true }
+serde-xml-rs = { workspace = true, optional = true }
 
 # Video processing (optional for Windows builds)
 ffmpeg-next = { workspace = true, optional = true }
-mp4parse = { workspace = true }
+mp4parse = { workspace = true, optional = true }
 
-# Compression
-flate2 = { workspace = true }
-lz4_flex = { workspace = true }
-zstd = { workspace = true }
+# Compression (WASM-incompatible)
+flate2 = { workspace = true, optional = true }
+lz4_flex = { workspace = true, optional = true }
+zstd = { workspace = true, optional = true }
 
 # Error handling and utilities
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 log = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+# Platform-specific dependencies (not available in WASM)
+colored = { workspace = true, optional = true }
+dirs = { workspace = true, optional = true }
 
 [features]
-default = []
-native = ["mozjpeg-sys"]
+default = ["full"]
+full = ["oxipng", "webp", "gif", "imageproc", "gltf", "meshopt", "flate2", "lz4_flex", "zstd", "serde-xml-rs", "mp4parse", "colored", "dirs"]
+native = ["mozjpeg-sys", "colored", "dirs"]
 video = ["ffmpeg-next"]
-wasm = []
+wasm = ["color_quant", "gif", "gltf"]  # WASM-compatible features (without oxipng/webp due to C dependencies)
 c_hotspots = []  # Enable C performance hotspots
 
 # Build dependencies for C integration

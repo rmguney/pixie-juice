@@ -44,6 +44,32 @@ impl MeshOptimizer {
     pub fn get_info(&self, data: &[u8]) -> OptResult<MeshInfo> {
         formats::get_mesh_info(data)
     }
+    
+    /// Validate a mesh file and return a detailed report
+    pub fn validate(&self, data: &[u8]) -> OptResult<validator::ValidationReport> {
+        // First detect the format
+        let format = detect_mesh_format(data)?;
+        
+        // Load the mesh data using the general loader
+        let mesh_data = loader::load_mesh_data(data, format.extension())?;
+        
+        // Run validation on the loaded data
+        let validator = validator::MeshValidator::new();
+        validator.validate(&mesh_data)
+    }
+    
+    /// Quick format detection and basic validation
+    pub fn detect_and_validate_format(&self, data: &[u8]) -> OptResult<(MeshFormat, bool)> {
+        let format = detect_mesh_format(data)?;
+        
+        // Quick validation - just try to parse without full validation
+        let is_valid = match self.validate(data) {
+            Ok(report) => report.is_valid,
+            Err(_) => false,
+        };
+        
+        Ok((format, is_valid))
+    }
 }
 
 impl Default for MeshOptimizer {

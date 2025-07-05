@@ -83,6 +83,11 @@ pub fn detect_mesh_format(data: &[u8]) -> OptResult<MeshFormat> {
     // Text-based format detection (less reliable)
     let text = String::from_utf8_lossy(&data[0..data.len().min(1024)]);
     
+    // FBX ASCII: starts with "; FBX" comment
+    if text.starts_with("; FBX") {
+        return Ok(MeshFormat::FBX);
+    }
+    
     // GLTF: JSON with gltf-specific properties
     if text.contains("\"asset\"") && text.contains("\"version\"") && text.contains("\"generator\"") {
         return Ok(MeshFormat::GLTF);

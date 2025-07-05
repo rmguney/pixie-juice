@@ -130,7 +130,7 @@ fn optimize_single_file(
         )?
     } else if is_mesh_file(input) {
         pb.set_message("Optimizing mesh...");
-        optimize_mesh(&input_data, format.as_ref(), mesh_opts)?
+        optimize_mesh(&input_data, format.as_ref(), target_reduction, mesh_opts)?
     } else if is_video_file(input) {
         pb.set_message("Optimizing video...");
         // Video optimization works directly with files
@@ -167,7 +167,7 @@ fn optimize_single_file(
 
 fn optimize_image(
     data: &[u8],
-    _format: Option<&OutputFormat>,
+    format: Option<&OutputFormat>,
     quality: Option<u8>,
     compression: Option<u8>,
     lossless: bool,
@@ -178,6 +178,8 @@ fn optimize_image(
     max_width: Option<u32>,
     max_height: Option<u32>,
 ) -> Result<Vec<u8>> {
+    use rust_core::image::ImageFormat;
+    
     let config = OptConfig {
         quality,
         compression_level: compression,
@@ -191,13 +193,35 @@ fn optimize_image(
     };
     
     let optimizer = ImageOptimizer::new();
-    optimizer.optimize(data, &config)
-        .map_err(|e| anyhow::anyhow!("Image optimization failed: {}", e))
+    
+    // Check if format conversion is requested
+    if let Some(output_format) = format {
+        let target_format = match output_format {
+            OutputFormat::Png => ImageFormat::PNG,
+            OutputFormat::Jpeg => ImageFormat::JPEG,
+            OutputFormat::Webp => ImageFormat::WebP,
+            OutputFormat::Gif => ImageFormat::GIF,
+            OutputFormat::Bmp => ImageFormat::BMP,
+            OutputFormat::Tiff => ImageFormat::TIFF,
+            _ => {
+                // For non-image formats, use regular optimization
+                return optimizer.optimize(data, &config)
+                    .map_err(|e| anyhow::anyhow!("Image optimization failed: {}", e));
+            }
+        };
+        
+        optimizer.optimize_to_format(data, target_format, &config)
+            .map_err(|e| anyhow::anyhow!("Image format conversion failed: {}", e))
+    } else {
+        optimizer.optimize(data, &config)
+            .map_err(|e| anyhow::anyhow!("Image optimization failed: {}", e))
+    }
 }
 
 fn optimize_mesh(
     data: &[u8],
     _format: Option<&OutputFormat>,
+    target_reduction: Option<f32>,
     mesh_opts: &MeshOptions,
 ) -> Result<Vec<u8>> {
     let config = OptConfig {
@@ -207,31 +231,14 @@ fn optimize_mesh(
         preserve_metadata: Some(false),
         fast_mode: Some(false),
         reduce_colors: Some(false),
-        target_reduction: mesh_opts.reduce,
+        target_reduction: target_reduction.or(mesh_opts.reduce),
         max_width: None,
         max_height: None,
     };
 
     let optimizer = MeshOptimizer::new();
-    
-    if mesh_opts.deduplicate {
-        let deduplicated = optimizer.deduplicate_vertices(data)
-            .map_err(|e| anyhow::anyhow!("Mesh deduplication failed: {}", e))?;
-        
-        if let Some(reduce_ratio) = mesh_opts.reduce {
-            optimizer.reduce_triangles(&deduplicated, reduce_ratio)
-                .map_err(|e| anyhow::anyhow!("Mesh reduction failed: {}", e))
-        } else {
-            Ok(deduplicated)
-        }
-    } else if let Some(reduce_ratio) = mesh_opts.reduce {
-        optimizer.reduce_triangles(data, reduce_ratio)
-            .map_err(|e| anyhow::anyhow!("Mesh reduction failed: {}", e))
-    } else {
-        // Use general optimize method
-        optimizer.optimize(data, &config)
-            .map_err(|e| anyhow::anyhow!("Mesh optimization failed: {}", e))
-    }
+    optimizer.optimize(data, &config)
+        .map_err(|e| anyhow::anyhow!("Mesh optimization failed: {}", e))
 }
 
 fn optimize_video(
@@ -393,7 +400,45 @@ fn validate_file(input: &Path, expected_format: Option<&str>) -> Result<()> {
             }
         }
     } else if is_mesh_file(input) {
-        println!("✅ Mesh file detected: {}", input.extension().unwrap().to_string_lossy().to_uppercase());
+        // Perform actual mesh validation, not just extension check
+        match rust_core::mesh::formats::detect_mesh_format(&data) {
+            Ok(format) => {
+                let mesh_optimizer = rust_core::MeshOptimizer::new();
+                match mesh_optimizer.validate(&data) {
+                    Ok(report) => {
+                        if report.is_valid {
+                            println!("✅ Valid {} mesh: {} vertices, {} triangles", 
+                                format.extension().to_uppercase(),
+                                report.vertex_count,
+                                report.triangle_count
+                            );
+                        } else {
+                            println!("❌ Invalid {} mesh:", format.extension().to_uppercase());
+                            for error in &report.errors {
+                                println!("  • {}", error);
+                            }
+                            return Err(anyhow::anyhow!("Mesh validation failed"));
+                        }
+                        
+                        if !report.warnings.is_empty() {
+                            println!("⚠️  Warnings:");
+                            for warning in &report.warnings {
+                                println!("  • {}", warning);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        println!("❌ Failed to validate {} mesh: {}", 
+                            format.extension().to_uppercase(), e);
+                        return Err(anyhow::anyhow!("Mesh validation failed"));
+                    }
+                }
+            }
+            Err(e) => {
+                println!("❌ Invalid mesh format: {}", e);
+                return Err(anyhow::anyhow!("Mesh format detection failed"));
+            }
+        }
     } else if is_video_file(input) {
         println!("✅ Video file detected: {}", input.extension().unwrap().to_string_lossy().to_uppercase());
     } else {
@@ -415,7 +460,7 @@ fn is_image_file(path: &Path) -> bool {
 fn is_mesh_file(path: &Path) -> bool {
     if let Some(ext) = path.extension() {
         matches!(ext.to_string_lossy().to_lowercase().as_str(), 
-                "obj" | "ply" | "stl" | "gltf" | "glb")
+                "obj" | "ply" | "stl" | "gltf" | "glb" | "dae" | "fbx")
     } else {
         false
     }

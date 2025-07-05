@@ -2,49 +2,239 @@
 #include <math.h>
 #include <string.h>
 
-// TODO: Implement SIMD-optimized mathematical operations
-// This is a placeholder implementation focusing on the API structure
+#ifdef _MSC_VER
+#include <intrin.h>
+#else
+#include <x86intrin.h>
+#endif
 
+// Feature detection
+static int has_sse = -1;
+static int has_avx = -1;
+
+static void detect_simd_features() {
+    if (has_sse == -1) {
+        int cpuinfo[4];
+#ifdef _MSC_VER
+        __cpuid(cpuinfo, 1);
+#else
+        __builtin_cpu_init();
+        cpuinfo[3] = __builtin_cpu_supports("sse") ? (1 << 25) : 0;
+        cpuinfo[2] = __builtin_cpu_supports("avx") ? (1 << 28) : 0;
+#endif
+        has_sse = (cpuinfo[3] & (1 << 25)) != 0;
+        has_avx = (cpuinfo[2] & (1 << 28)) != 0;
+    }
+}
+
+// SSE-optimized vector operations (4 vectors at a time)
 void vec3_add_simd(const Vec3* a, const Vec3* b, Vec3* result, size_t count) {
-    // TODO: Use SSE/AVX for SIMD acceleration
-    for (size_t i = 0; i < count; i++) {
-        result[i].x = a[i].x + b[i].x;
-        result[i].y = a[i].y + b[i].y;
-        result[i].z = a[i].z + b[i].z;
+    detect_simd_features();
+    
+    if (has_sse && count >= 4) {
+        size_t simd_count = count & ~3; // Round down to multiple of 4
+        
+        for (size_t i = 0; i < simd_count; i += 4) {
+            // Load 4 vectors worth of x components
+            __m128 ax = _mm_set_ps(a[i+3].x, a[i+2].x, a[i+1].x, a[i].x);
+            __m128 bx = _mm_set_ps(b[i+3].x, b[i+2].x, b[i+1].x, b[i].x);
+            __m128 rx = _mm_add_ps(ax, bx);
+            
+            // Load 4 vectors worth of y components
+            __m128 ay = _mm_set_ps(a[i+3].y, a[i+2].y, a[i+1].y, a[i].y);
+            __m128 by = _mm_set_ps(b[i+3].y, b[i+2].y, b[i+1].y, b[i].y);
+            __m128 ry = _mm_add_ps(ay, by);
+            
+            // Load 4 vectors worth of z components
+            __m128 az = _mm_set_ps(a[i+3].z, a[i+2].z, a[i+1].z, a[i].z);
+            __m128 bz = _mm_set_ps(b[i+3].z, b[i+2].z, b[i+1].z, b[i].z);
+            __m128 rz = _mm_add_ps(az, bz);
+            
+            // Store results
+            float temp[4];
+            _mm_store_ps(temp, rx);
+            result[i].x = temp[0]; result[i+1].x = temp[1]; result[i+2].x = temp[2]; result[i+3].x = temp[3];
+            
+            _mm_store_ps(temp, ry);
+            result[i].y = temp[0]; result[i+1].y = temp[1]; result[i+2].y = temp[2]; result[i+3].y = temp[3];
+            
+            _mm_store_ps(temp, rz);
+            result[i].z = temp[0]; result[i+1].z = temp[1]; result[i+2].z = temp[2]; result[i+3].z = temp[3];
+        }
+        
+        // Handle remaining elements
+        for (size_t i = simd_count; i < count; i++) {
+            result[i].x = a[i].x + b[i].x;
+            result[i].y = a[i].y + b[i].y;
+            result[i].z = a[i].z + b[i].z;
+        }
+    } else {
+        // Fallback to scalar implementation
+        for (size_t i = 0; i < count; i++) {
+            result[i].x = a[i].x + b[i].x;
+            result[i].y = a[i].y + b[i].y;
+            result[i].z = a[i].z + b[i].z;
+        }
     }
 }
 
 void vec3_sub_simd(const Vec3* a, const Vec3* b, Vec3* result, size_t count) {
-    // TODO: Use SSE/AVX for SIMD acceleration
-    for (size_t i = 0; i < count; i++) {
-        result[i].x = a[i].x - b[i].x;
-        result[i].y = a[i].y - b[i].y;
-        result[i].z = a[i].z - b[i].z;
+    detect_simd_features();
+    
+    if (has_sse && count >= 4) {
+        size_t simd_count = count & ~3;
+        
+        for (size_t i = 0; i < simd_count; i += 4) {
+            __m128 ax = _mm_set_ps(a[i+3].x, a[i+2].x, a[i+1].x, a[i].x);
+            __m128 bx = _mm_set_ps(b[i+3].x, b[i+2].x, b[i+1].x, b[i].x);
+            __m128 rx = _mm_sub_ps(ax, bx);
+            
+            __m128 ay = _mm_set_ps(a[i+3].y, a[i+2].y, a[i+1].y, a[i].y);
+            __m128 by = _mm_set_ps(b[i+3].y, b[i+2].y, b[i+1].y, b[i].y);
+            __m128 ry = _mm_sub_ps(ay, by);
+            
+            __m128 az = _mm_set_ps(a[i+3].z, a[i+2].z, a[i+1].z, a[i].z);
+            __m128 bz = _mm_set_ps(b[i+3].z, b[i+2].z, b[i+1].z, b[i].z);
+            __m128 rz = _mm_sub_ps(az, bz);
+            
+            float temp[4];
+            _mm_store_ps(temp, rx);
+            result[i].x = temp[0]; result[i+1].x = temp[1]; result[i+2].x = temp[2]; result[i+3].x = temp[3];
+            
+            _mm_store_ps(temp, ry);
+            result[i].y = temp[0]; result[i+1].y = temp[1]; result[i+2].y = temp[2]; result[i+3].y = temp[3];
+            
+            _mm_store_ps(temp, rz);
+            result[i].z = temp[0]; result[i+1].z = temp[1]; result[i+2].z = temp[2]; result[i+3].z = temp[3];
+        }
+        
+        for (size_t i = simd_count; i < count; i++) {
+            result[i].x = a[i].x - b[i].x;
+            result[i].y = a[i].y - b[i].y;
+            result[i].z = a[i].z - b[i].z;
+        }
+    } else {
+        for (size_t i = 0; i < count; i++) {
+            result[i].x = a[i].x - b[i].x;
+            result[i].y = a[i].y - b[i].y;
+            result[i].z = a[i].z - b[i].z;
+        }
     }
 }
 
 void vec3_mul_scalar_simd(const Vec3* vectors, float scalar, Vec3* result, size_t count) {
-    // TODO: Use SSE/AVX for SIMD acceleration
-    for (size_t i = 0; i < count; i++) {
-        result[i].x = vectors[i].x * scalar;
-        result[i].y = vectors[i].y * scalar;
-        result[i].z = vectors[i].z * scalar;
+    detect_simd_features();
+    
+    if (has_sse && count >= 4) {
+        size_t simd_count = count & ~3;
+        __m128 scalar_vec = _mm_set1_ps(scalar);
+        
+        for (size_t i = 0; i < simd_count; i += 4) {
+            __m128 vx = _mm_set_ps(vectors[i+3].x, vectors[i+2].x, vectors[i+1].x, vectors[i].x);
+            __m128 vy = _mm_set_ps(vectors[i+3].y, vectors[i+2].y, vectors[i+1].y, vectors[i].y);
+            __m128 vz = _mm_set_ps(vectors[i+3].z, vectors[i+2].z, vectors[i+1].z, vectors[i].z);
+            
+            __m128 rx = _mm_mul_ps(vx, scalar_vec);
+            __m128 ry = _mm_mul_ps(vy, scalar_vec);
+            __m128 rz = _mm_mul_ps(vz, scalar_vec);
+            
+            float temp[4];
+            _mm_store_ps(temp, rx);
+            result[i].x = temp[0]; result[i+1].x = temp[1]; result[i+2].x = temp[2]; result[i+3].x = temp[3];
+            
+            _mm_store_ps(temp, ry);
+            result[i].y = temp[0]; result[i+1].y = temp[1]; result[i+2].y = temp[2]; result[i+3].y = temp[3];
+            
+            _mm_store_ps(temp, rz);
+            result[i].z = temp[0]; result[i+1].z = temp[1]; result[i+2].z = temp[2]; result[i+3].z = temp[3];
+        }
+        
+        for (size_t i = simd_count; i < count; i++) {
+            result[i].x = vectors[i].x * scalar;
+            result[i].y = vectors[i].y * scalar;
+            result[i].z = vectors[i].z * scalar;
+        }
+    } else {
+        for (size_t i = 0; i < count; i++) {
+            result[i].x = vectors[i].x * scalar;
+            result[i].y = vectors[i].y * scalar;
+            result[i].z = vectors[i].z * scalar;
+        }
     }
 }
 
 void vec3_dot_simd(const Vec3* a, const Vec3* b, float* result, size_t count) {
-    // TODO: Use SSE/AVX for SIMD acceleration
-    for (size_t i = 0; i < count; i++) {
-        result[i] = a[i].x * b[i].x + a[i].y * b[i].y + a[i].z * b[i].z;
+    detect_simd_features();
+    
+    if (has_sse && count >= 4) {
+        size_t simd_count = count & ~3;
+        
+        for (size_t i = 0; i < simd_count; i += 4) {
+            __m128 ax = _mm_set_ps(a[i+3].x, a[i+2].x, a[i+1].x, a[i].x);
+            __m128 bx = _mm_set_ps(b[i+3].x, b[i+2].x, b[i+1].x, b[i].x);
+            __m128 ay = _mm_set_ps(a[i+3].y, a[i+2].y, a[i+1].y, a[i].y);
+            __m128 by = _mm_set_ps(b[i+3].y, b[i+2].y, b[i+1].y, b[i].y);
+            __m128 az = _mm_set_ps(a[i+3].z, a[i+2].z, a[i+1].z, a[i].z);
+            __m128 bz = _mm_set_ps(b[i+3].z, b[i+2].z, b[i+1].z, b[i].z);
+            
+            __m128 dot = _mm_add_ps(_mm_add_ps(_mm_mul_ps(ax, bx), _mm_mul_ps(ay, by)), _mm_mul_ps(az, bz));
+            
+            float temp[4];
+            _mm_store_ps(temp, dot);
+            result[i] = temp[0]; result[i+1] = temp[1]; result[i+2] = temp[2]; result[i+3] = temp[3];
+        }
+        
+        for (size_t i = simd_count; i < count; i++) {
+            result[i] = a[i].x * b[i].x + a[i].y * b[i].y + a[i].z * b[i].z;
+        }
+    } else {
+        for (size_t i = 0; i < count; i++) {
+            result[i] = a[i].x * b[i].x + a[i].y * b[i].y + a[i].z * b[i].z;
+        }
     }
 }
 
 void vec3_cross_simd(const Vec3* a, const Vec3* b, Vec3* result, size_t count) {
-    // TODO: Use SSE/AVX for SIMD acceleration
-    for (size_t i = 0; i < count; i++) {
-        result[i].x = a[i].y * b[i].z - a[i].z * b[i].y;
-        result[i].y = a[i].z * b[i].x - a[i].x * b[i].z;
-        result[i].z = a[i].x * b[i].y - a[i].y * b[i].x;
+    detect_simd_features();
+    
+    if (has_sse && count >= 4) {
+        size_t simd_count = count & ~3;
+        
+        for (size_t i = 0; i < simd_count; i += 4) {
+            __m128 ax = _mm_set_ps(a[i+3].x, a[i+2].x, a[i+1].x, a[i].x);
+            __m128 ay = _mm_set_ps(a[i+3].y, a[i+2].y, a[i+1].y, a[i].y);
+            __m128 az = _mm_set_ps(a[i+3].z, a[i+2].z, a[i+1].z, a[i].z);
+            __m128 bx = _mm_set_ps(b[i+3].x, b[i+2].x, b[i+1].x, b[i].x);
+            __m128 by = _mm_set_ps(b[i+3].y, b[i+2].y, b[i+1].y, b[i].y);
+            __m128 bz = _mm_set_ps(b[i+3].z, b[i+2].z, b[i+1].z, b[i].z);
+            
+            // Cross product: (ay*bz - az*by, az*bx - ax*bz, ax*by - ay*bx)
+            __m128 rx = _mm_sub_ps(_mm_mul_ps(ay, bz), _mm_mul_ps(az, by));
+            __m128 ry = _mm_sub_ps(_mm_mul_ps(az, bx), _mm_mul_ps(ax, bz));
+            __m128 rz = _mm_sub_ps(_mm_mul_ps(ax, by), _mm_mul_ps(ay, bx));
+            
+            float temp[4];
+            _mm_store_ps(temp, rx);
+            result[i].x = temp[0]; result[i+1].x = temp[1]; result[i+2].x = temp[2]; result[i+3].x = temp[3];
+            
+            _mm_store_ps(temp, ry);
+            result[i].y = temp[0]; result[i+1].y = temp[1]; result[i+2].y = temp[2]; result[i+3].y = temp[3];
+            
+            _mm_store_ps(temp, rz);
+            result[i].z = temp[0]; result[i+1].z = temp[1]; result[i+2].z = temp[2]; result[i+3].z = temp[3];
+        }
+        
+        for (size_t i = simd_count; i < count; i++) {
+            result[i].x = a[i].y * b[i].z - a[i].z * b[i].y;
+            result[i].y = a[i].z * b[i].x - a[i].x * b[i].z;
+            result[i].z = a[i].x * b[i].y - a[i].y * b[i].x;
+        }
+    } else {
+        for (size_t i = 0; i < count; i++) {
+            result[i].x = a[i].y * b[i].z - a[i].z * b[i].y;
+            result[i].y = a[i].z * b[i].x - a[i].x * b[i].z;
+            result[i].z = a[i].x * b[i].y - a[i].y * b[i].x;
+        }
     }
 }
 
@@ -69,19 +259,46 @@ void mat4_identity(Mat4* matrix) {
 }
 
 void mat4_multiply(const Mat4* a, const Mat4* b, Mat4* result) {
-    // TODO: Optimize with SIMD
-    for (int i = 0; i < 4; i++) {
-        for (int j = 0; j < 4; j++) {
-            result->m[i*4 + j] = 0.0f;
-            for (int k = 0; k < 4; k++) {
-                result->m[i*4 + j] += a->m[i*4 + k] * b->m[k*4 + j];
+    detect_simd_features();
+    
+    if (has_sse) {
+        // Load matrix b columns
+        __m128 b_col0 = _mm_load_ps(&b->m[0]);
+        __m128 b_col1 = _mm_load_ps(&b->m[4]);
+        __m128 b_col2 = _mm_load_ps(&b->m[8]);
+        __m128 b_col3 = _mm_load_ps(&b->m[12]);
+        
+        for (int i = 0; i < 4; i++) {
+            __m128 a_row = _mm_set_ps(a->m[i*4+3], a->m[i*4+2], a->m[i*4+1], a->m[i*4+0]);
+            
+            __m128 result_row = _mm_add_ps(
+                _mm_add_ps(
+                    _mm_mul_ps(_mm_shuffle_ps(a_row, a_row, 0x00), b_col0),
+                    _mm_mul_ps(_mm_shuffle_ps(a_row, a_row, 0x55), b_col1)
+                ),
+                _mm_add_ps(
+                    _mm_mul_ps(_mm_shuffle_ps(a_row, a_row, 0xAA), b_col2),
+                    _mm_mul_ps(_mm_shuffle_ps(a_row, a_row, 0xFF), b_col3)
+                )
+            );
+            
+            _mm_store_ps(&result->m[i*4], result_row);
+        }
+    } else {
+        // Fallback scalar implementation
+        for (int i = 0; i < 4; i++) {
+            for (int j = 0; j < 4; j++) {
+                result->m[i*4 + j] = 0.0f;
+                for (int k = 0; k < 4; k++) {
+                    result->m[i*4 + j] += a->m[i*4 + k] * b->m[k*4 + j];
+                }
             }
         }
     }
 }
 
 void mat4_multiply_simd(const Mat4* matrices_a, const Mat4* matrices_b, Mat4* results, size_t count) {
-    // TODO: Implement batch matrix multiplication with SIMD
+    // Use the optimized single matrix multiply for each pair
     for (size_t i = 0; i < count; i++) {
         mat4_multiply(&matrices_a[i], &matrices_b[i], &results[i]);
     }

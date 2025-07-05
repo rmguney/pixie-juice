@@ -9,6 +9,8 @@ pub struct ValidationReport {
     pub errors: Vec<String>,
     pub warnings: Vec<String>,
     pub is_valid: bool,
+    pub vertex_count: u32,
+    pub triangle_count: u32,
 }
 
 impl ValidationReport {
@@ -17,6 +19,8 @@ impl ValidationReport {
             errors: Vec::new(),
             warnings: Vec::new(),
             is_valid: true,
+            vertex_count: 0,
+            triangle_count: 0,
         }
     }
 }
@@ -32,6 +36,10 @@ impl MeshValidator {
     /// Validate mesh data and return a report
     pub fn validate(&self, mesh: &MeshData) -> OptResult<ValidationReport> {
         let mut report = ValidationReport::new();
+        
+        // Populate basic statistics
+        report.vertex_count = mesh.vertex_count() as u32;
+        report.triangle_count = (mesh.indices.len() / 3) as u32;
 
         // Basic validation
         self.check_vertex_data(mesh, &mut report)?;
