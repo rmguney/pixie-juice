@@ -51,14 +51,14 @@ export default function ResultsPanel({ results, onReset }) {
   const successCount = results.filter(r => r.success).length;
 
   return (
-    <div className="border border-neutral-800 rounded-lg overflow-hidden">
-      <div className="p-4 border-b border-neutral-800 flex items-center justify-between">
+    <div className="rounded-lg overflow-hidden">
+      <div className="p-[11px] border-b border-neutral-800 flex items-center justify-between">
         <h3 className="text-sm font-normal text-white">Results</h3>
         <div className="flex space-x-2">
           <button
             onClick={downloadAll}
             disabled={successCount === 0}
-            className="px-3 py-1.5 bg-indigo-600 text-white text-xs rounded hover:bg-indigo-700 disabled:bg-neutral-800 disabled:text-neutral-600 transition-colors"
+            className="px-3 py-1.5 bg-black hover:bg-neutral-900 border border-neutral-800 text-white text-xs rounded transition-colors disabled:text-neutral-500"
           >
             Download All
           </button>

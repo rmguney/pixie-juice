@@ -156,7 +156,7 @@ fn load_simple_gltf_data(data: &[u8]) -> OptResult<MeshData> {
             if let Some(node_mesh) = node.mesh() {
                 for primitive in node_mesh.primitives() {
                     // Get vertex positions
-                    if let Some(positions_accessor) = primitive.get(&gltf::Semantic::Positions) {
+                    if let Some(_positions_accessor) = primitive.get(&gltf::Semantic::Positions) {
                         // We need the buffer data, but glTF crate doesn't provide it directly
                         // For now, create a placeholder mesh
                         // TODO: Implement proper buffer reading when we have external .bin files

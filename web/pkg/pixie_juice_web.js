@@ -256,16 +256,16 @@ export function supported_mesh_formats() {
     return v1;
 }
 
-function __wbg_adapter_26(arg0, arg1, arg2) {
-    wasm.closure2_externref_shim(arg0, arg1, arg2);
+function __wbg_adapter_26(arg0, arg1) {
+    wasm._dyn_core__ops__function__FnMut_____Output___R_as_wasm_bindgen__closure__WasmClosure___describe__invoke__ha54dc42a7a21654c(arg0, arg1);
 }
 
-function __wbg_adapter_29(arg0, arg1) {
-    wasm._dyn_core__ops__function__FnMut_____Output___R_as_wasm_bindgen__closure__WasmClosure___describe__invoke__h4bf8f2f281fd2847(arg0, arg1);
+function __wbg_adapter_29(arg0, arg1, arg2) {
+    wasm.closure6_externref_shim(arg0, arg1, arg2);
 }
 
-function __wbg_adapter_84(arg0, arg1, arg2, arg3) {
-    wasm.closure153_externref_shim(arg0, arg1, arg2, arg3);
+function __wbg_adapter_86(arg0, arg1, arg2, arg3) {
+    wasm.closure152_externref_shim(arg0, arg1, arg2, arg3);
 }
 
 const CanvasRendererFinalization = (typeof FinalizationRegistry === 'undefined')
@@ -584,10 +584,23 @@ export class WasmOptConfig {
         return ret !== 0;
     }
     /**
-     * @param {boolean} reduce
+     * @param {boolean} reduce_colors
      */
-    set reduce_colors(reduce) {
-        wasm.wasmoptconfig_set_reduce_colors(this.__wbg_ptr, reduce);
+    set reduce_colors(reduce_colors) {
+        wasm.wasmoptconfig_set_reduce_colors(this.__wbg_ptr, reduce_colors);
+    }
+    /**
+     * @returns {number}
+     */
+    get target_reduction() {
+        const ret = wasm.wasmoptconfig_target_reduction(this.__wbg_ptr);
+        return ret;
+    }
+    /**
+     * @param {number} target_reduction
+     */
+    set target_reduction(target_reduction) {
+        wasm.wasmoptconfig_set_target_reduction(this.__wbg_ptr, target_reduction);
     }
 }
 
@@ -718,7 +731,7 @@ function __wbg_get_imports() {
                 const a = state0.a;
                 state0.a = 0;
                 try {
-                    return __wbg_adapter_84(a, state0.b, arg0, arg1);
+                    return __wbg_adapter_86(a, state0.b, arg0, arg1);
                 } finally {
                     state0.a = a;
                 }
@@ -861,8 +874,8 @@ function __wbg_get_imports() {
         const ret = false;
         return ret;
     };
-    imports.wbg.__wbindgen_closure_wrapper2658 = function(arg0, arg1, arg2) {
-        const ret = makeMutClosure(arg0, arg1, 3, __wbg_adapter_26);
+    imports.wbg.__wbindgen_closure_wrapper2687 = function(arg0, arg1, arg2) {
+        const ret = makeMutClosure(arg0, arg1, 3, __wbg_adapter_29);
         return ret;
     };
     imports.wbg.__wbindgen_closure_wrapper66 = function(arg0, arg1, arg2) {

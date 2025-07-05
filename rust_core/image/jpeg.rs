@@ -5,7 +5,7 @@
 
 use crate::types::{OptConfig, OptError, OptResult};
 
-/// Optimize JPEG data
+/// Optimize JPEG data with aggressive quality-based compression
 pub fn optimize_jpeg(data: &[u8], config: &OptConfig) -> OptResult<Vec<u8>> {
     // First, decode the JPEG to get raw image data
     let img = image::load_from_memory(data)
@@ -14,21 +14,78 @@ pub fn optimize_jpeg(data: &[u8], config: &OptConfig) -> OptResult<Vec<u8>> {
     let rgb_image = img.to_rgb8();
     let (_width, _height) = (rgb_image.width(), rgb_image.height());
 
-    // Determine quality setting
-    let quality = config.quality.unwrap_or(85).clamp(1, 100) as u8;
+    // Determine quality setting based on target reduction
+    let quality = if let Some(q) = config.quality {
+        q.clamp(1, 100) as u8
+    } else if let Some(target_reduction) = config.target_reduction {
+        // Aggressive quality reduction for significant file size savings
+        if target_reduction >= 0.6 {
+            35 // Very aggressive compression for 60%+ reduction
+        } else if target_reduction >= 0.4 {
+            55 // Aggressive compression for 40%+ reduction
+        } else if target_reduction >= 0.2 {
+            75 // Moderate compression for 20%+ reduction
+        } else {
+            85 // Default high quality
+        }
+    } else {
+        75 // Default moderate compression for good size reduction
+    };
 
     // Use mozjpeg if available (native builds only)
     #[cfg(feature = "native")]
     if let Ok(optimized) = optimize_with_mozjpeg(&rgb_image, quality) {
-        log::info!("JPEG optimized with mozjpeg: {} bytes -> {} bytes ({:.1}% reduction)", 
+        let reduction = 1.0 - (optimized.len() as f64 / data.len() as f64);
+        log::info!("JPEG optimized with mozjpeg: {} bytes -> {} bytes ({:.1}% reduction, quality: {})", 
                   data.len(), 
                   optimized.len(),
-                  (1.0 - (optimized.len() as f64 / data.len() as f64)) * 100.0);
+                  reduction * 100.0,
+                  quality);
+        
+        // If reduction is still insufficient, try even more aggressive settings
+        if reduction < 0.3 && quality > 40 && !config.preserve_metadata.unwrap_or(false) {
+            let aggressive_quality = (quality as f32 * 0.7).max(25.0) as u8;
+            if let Ok(aggressive_optimized) = optimize_with_mozjpeg(&rgb_image, aggressive_quality) {
+                let aggressive_reduction = 1.0 - (aggressive_optimized.len() as f64 / data.len() as f64);
+                if aggressive_reduction > reduction {
+                    log::info!("Aggressive JPEG: {} bytes ({:.1}% reduction, quality: {})", 
+                              aggressive_optimized.len(), aggressive_reduction * 100.0, aggressive_quality);
+                    return Ok(aggressive_optimized);
+                }
+            }
+        }
+        
         return Ok(optimized);
     }
 
-    // Fallback to pure Rust JPEG encoder
-    optimize_with_rust_encoder(&rgb_image, quality, data.len())
+    // Fallback to pure Rust JPEG encoder with multiple quality attempts
+    let mut best_result = optimize_with_rust_encoder(&rgb_image, quality, data.len())?;
+    let mut best_reduction = 1.0 - (best_result.len() as f64 / data.len() as f64);
+    
+    // If initial reduction is insufficient, try progressively lower quality
+    if best_reduction < 0.3 && quality > 40 {
+        let aggressive_qualities = [
+            (quality as f32 * 0.8) as u8,
+            (quality as f32 * 0.6) as u8,
+            (quality as f32 * 0.4) as u8,
+        ];
+        
+        for &test_quality in &aggressive_qualities {
+            if test_quality >= 20 { // Don't go below quality 20
+                if let Ok(test_result) = optimize_with_rust_encoder(&rgb_image, test_quality, data.len()) {
+                    let test_reduction = 1.0 - (test_result.len() as f64 / data.len() as f64);
+                    if test_reduction > best_reduction {
+                        best_result = test_result;
+                        best_reduction = test_reduction;
+                        log::info!("Better JPEG compression found: {:.1}% reduction at quality {}", 
+                                  test_reduction * 100.0, test_quality);
+                    }
+                }
+            }
+        }
+    }
+    
+    Ok(best_result)
 }
 
 /// Optimize JPEG using pure Rust encoder

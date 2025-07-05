@@ -1,65 +1,42 @@
 use std::io::{self, Write};
-#[cfg(feature = "colored")]
-use colored::*;
 
-// Macro to handle colored output conditionally
-#[cfg(feature = "colored")]
-macro_rules! colored_text {
-    ($text:expr, $color:ident) => {
-        $text.$color()
-    };
-    ($text:expr, $color:ident, $style:ident) => {
-        $text.$color().$style()
-    };
-}
-
-#[cfg(not(feature = "colored"))]
-macro_rules! colored_text {
-    ($text:expr, $color:ident) => {
-        $text
-    };
-    ($text:expr, $color:ident, $style:ident) => {
-        $text
-    };
-}
-
-/// Enhanced error messages and user feedback
+// Simple implementation without colored output for now
 pub struct UserFeedback;
 
 impl UserFeedback {
     /// Display a welcoming message with version info
     pub fn show_welcome() {
-        println!("{}", "✨ Pixie Juice - Image/Mesh/Video Optimizer".bold().cyan());
-        println!("{}", "Version 0.1.0 - Powered by Rust + C Hotspots".dimmed());
+        println!("{}", "✨ Pixie Juice - Image/Mesh/Video Optimizer");
+        println!("{}", "Version 0.1.0 - Powered by Rust + C Hotspots");
         println!();
     }
 
     /// Display helpful error messages with suggestions
     pub fn show_error(error: &str, suggestion: Option<&str>) {
-        eprintln!("{} {}", "❌ Error:".red().bold(), error);
+        eprintln!("{} {}", "❌ Error:", error);
         if let Some(hint) = suggestion {
-            eprintln!("{} {}", "💡 Hint:".yellow().bold(), hint);
+            eprintln!("{} {}", "💡 Hint:", hint);
         }
         eprintln!();
     }
 
     /// Display success messages with metrics
     pub fn show_success(message: &str, stats: Option<&str>) {
-        println!("{} {}", "✅ Success:".green().bold(), message);
+        println!("{} {}", "✅ Success:", message);
         if let Some(metrics) = stats {
-            println!("{} {}", "📊 Stats:".blue().bold(), metrics);
+            println!("{} {}", "📊 Stats:", metrics);
         }
         println!();
     }
 
     /// Display warnings that don't halt execution
     pub fn show_warning(message: &str) {
-        println!("{} {}", "⚠️  Warning:".yellow().bold(), message);
+        println!("{} {}", "⚠️  Warning:", message);
     }
 
     /// Display information messages
     pub fn show_info(message: &str) {
-        println!("{} {}", "ℹ️  Info:".blue().bold(), message);
+        println!("{} {}", "ℹ️  Info:", message);
     }
 
     /// Enhanced file not found error with helpful suggestions
@@ -126,11 +103,11 @@ impl UserFeedback {
         let eta_text = eta.map(|e| format!(" ETA: {}", e)).unwrap_or_default();
         
         print!("\r{} {} [{}] {:.1}%{}", 
-               spinner_chars[spinner_idx].cyan(),
+               spinner_chars[spinner_idx],
                operation,
-               bar.green(),
+               bar,
                progress * 100.0,
-               eta_text.dimmed()
+               eta_text
         );
         io::stdout().flush().unwrap();
     }
@@ -139,9 +116,9 @@ impl UserFeedback {
     pub fn finish_progress(operation: &str, duration: &str) {
         print!("\r{}{}", " ".repeat(80), "\r"); // Clear line
         println!("{} {} ({})", 
-                "✅".green(), 
+                "✅", 
                 operation, 
-                duration.dimmed()
+                duration
         );
     }
 
@@ -159,27 +136,27 @@ impl UserFeedback {
             0.0
         };
 
-        println!("{}", "📁 File Processing Results".bold().cyan());
-        println!("   Input:     {}", input_path.green());
-        println!("   Output:    {}", output_path.green());
-        println!("   Original:  {}", format_file_size(original_size).yellow());
-        println!("   Optimized: {}", format_file_size(optimized_size).yellow());
+        println!("{}", "📁 File Processing Results");
+        println!("   Input:     {}", input_path);
+        println!("   Output:    {}", output_path);
+        println!("   Original:  {}", format_file_size(original_size));
+        println!("   Optimized: {}", format_file_size(optimized_size));
         
         if reduction > 0.0 {
             println!("   Saved:     {:.1}% ({} smaller)", 
                     reduction, 
-                    format_file_size(original_size - optimized_size).green().bold()
+                    format_file_size(original_size - optimized_size)
             );
         } else if reduction < 0.0 {
             println!("   Increased: {:.1}% ({} larger)", 
                     -reduction, 
-                    format_file_size(optimized_size - original_size).red()
+                    format_file_size(optimized_size - original_size)
             );
         } else {
-            println!("   Size:      {} (unchanged)", "No change".dimmed());
+            println!("   Size:      {} (unchanged)", "No change");
         }
         
-        println!("   Duration:  {}", duration.dimmed());
+        println!("   Duration:  {}", duration);
         println!();
     }
 
@@ -191,32 +168,32 @@ impl UserFeedback {
         total_saved: u64,
         duration: &str
     ) {
-        println!("{}", "📊 Batch Processing Summary".bold().cyan());
+        println!("{}", "📊 Batch Processing Summary");
         println!("   Total files:     {}", total_files);
-        println!("   Successful:      {}", successful.to_string().green());
+        println!("   Successful:      {}", successful.to_string());
         if failed > 0 {
-            println!("   Failed:          {}", failed.to_string().red());
+            println!("   Failed:          {}", failed.to_string());
         }
         if total_saved > 0 {
-            println!("   Total saved:     {}", format_file_size(total_saved).green().bold());
+            println!("   Total saved:     {}", format_file_size(total_saved));
         }
-        println!("   Total duration:  {}", duration.dimmed());
+        println!("   Total duration:  {}", duration);
         println!();
     }
 
     /// Show helpful usage examples
     pub fn show_examples() {
-        println!("{}", "💡 Usage Examples".bold().cyan());
+        println!("{}", "💡 Usage Examples");
         println!();
-        println!("  {}", "Image Optimization:".bold());
+        println!("  {}", "Image Optimization:");
         println!("    pxjc optimize -i photo.jpg -o optimized.jpg -q 85");
         println!("    pxjc optimize -i image.png -o image.webp --format webp");
         println!();
-        println!("  {}", "Mesh Processing:".bold());
+        println!("  {}", "Mesh Processing:");
         println!("    pxjc optimize -i model.ply -o optimized.ply --reduce 0.5");
         println!("    pxjc optimize -i mesh.obj -o mesh.ply --deduplicate");
         println!();
-        println!("  {}", "Batch Processing:".bold());
+        println!("  {}", "Batch Processing:");
         println!("    pxjc batch --input-dir ./images --output-dir ./optimized");
         println!("    pxjc batch -i ./photos -o ./compressed --format jpeg -q 80");
         println!();

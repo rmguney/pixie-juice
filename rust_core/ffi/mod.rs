@@ -3,6 +3,15 @@
 //! This module provides safe Rust wrappers around C performance hotspots.
 //! Each sub-module corresponds to a specific category of optimizations.
 
+// Include generated C bindings when C hotspots are available
+#[cfg(c_hotspots_available)]
+mod c_bindings {
+    include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
+}
+
+#[cfg(c_hotspots_available)]
+pub use c_bindings::*;
+
 pub mod image_ffi;
 pub mod math_ffi;
 pub mod memory_ffi;
@@ -29,7 +38,7 @@ pub use image_ffi::{
 
 pub use memory_ffi::{
     memcpy_simd_safe, memset_simd_safe, memcmp_fast_safe,
-    prefetch_memory, flush_cache, get_cache_line_size_safe,
+    prefetch_memory_safe, flush_cache_safe, get_cache_line_size_safe,
     fill_pattern_u32_safe, fill_pattern_u64_safe, find_pattern_safe,
     validate_buffer_bounds_safe, detect_buffer_overflow_safe
 };

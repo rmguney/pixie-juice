@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::fs;
+
+#[cfg(feature = "dirs")]
 use dirs;
 
 /// Configuration structure for Pixie Juice
@@ -168,11 +170,19 @@ impl PixieConfig {
     }
 
     /// Get the configuration file path
+    #[cfg(feature = "dirs")]
     pub fn get_config_path() -> Result<PathBuf, Box<dyn std::error::Error>> {
         let config_dir = dirs::config_dir()
             .ok_or("Could not determine config directory")?;
         
         Ok(config_dir.join("pixie-juice").join("config.toml"))
+    }
+    
+    /// Get the configuration file path (WASM fallback)
+    #[cfg(not(feature = "dirs"))]
+    pub fn get_config_path() -> Result<PathBuf, Box<dyn std::error::Error>> {
+        // In WASM, there's no filesystem access for config files
+        Err("Configuration files not supported in WASM builds".into())
     }
 
     /// Load configuration from a specific file

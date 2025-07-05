@@ -13,8 +13,8 @@ wasm-bindgen-futures = "0.4"
 console_error_panic_hook = "0.1"
 wee_alloc = { version = "0.4", optional = true }
 
-# Include the core Rust functionality with WASM-compatible features
-rust_core = { path = "../rust_core", default-features = false, features = ["wasm"] }
+# Include the core Rust functionality with WASM-compatible features including C hotspots
+rust_core = { path = "../rust_core", default-features = false, features = ["wasm", "c_hotspots"] }
 
 # Additional WASM-compatible dependencies
 serde = { version = "1.0", features = ["derive"] }

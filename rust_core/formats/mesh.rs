@@ -10,6 +10,8 @@ pub enum MeshFormat {
     Stl,
     Gltf,
     Glb,
+    Dae,
+    Fbx,
 }
 
 impl MeshFormat {
@@ -26,6 +28,8 @@ impl MeshFormat {
             "stl" => Ok(Self::Stl),
             "gltf" => Ok(Self::Gltf),
             "glb" => Ok(Self::Glb),
+            "dae" => Ok(Self::Dae),
+            "fbx" => Ok(Self::Fbx),
             _ => Err(OptError::FormatError(format!("Unsupported mesh format: {}", ext))),
         }
     }
@@ -38,6 +42,8 @@ impl MeshFormat {
             Self::Stl => "stl",
             Self::Gltf => "gltf",
             Self::Glb => "glb",
+            Self::Dae => "dae",
+            Self::Fbx => "fbx",
         }
     }
     
@@ -49,6 +55,8 @@ impl MeshFormat {
             Self::Stl => "model/stl",
             Self::Gltf => "model/gltf+json",
             Self::Glb => "model/gltf-binary",
+            Self::Dae => "model/vnd.collada+xml",
+            Self::Fbx => "model/fbx",
         }
     }
     
@@ -59,7 +67,7 @@ impl MeshFormat {
     
     /// Check if format supports materials/textures
     pub fn supports_materials(&self) -> bool {
-        matches!(self, Self::Obj | Self::Gltf | Self::Glb)
+        matches!(self, Self::Obj | Self::Gltf | Self::Glb | Self::Dae | Self::Fbx)
     }
     
     /// Check if format is suitable for web use

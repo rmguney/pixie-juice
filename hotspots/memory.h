@@ -18,6 +18,13 @@ void memmove_simd(void* dest, const void* src, size_t size);
 // Memory comparison with early exit optimization
 int memcmp_fast(const void* ptr1, const void* ptr2, size_t size);
 
+// Free block tracking for allocator
+typedef struct FreeBlock {
+    size_t offset;
+    size_t size;
+    struct FreeBlock* next;
+} FreeBlock;
+
 // Custom allocator for large media files
 typedef struct {
     void* base_address;
@@ -25,6 +32,7 @@ typedef struct {
     size_t used_size;
     size_t alignment;
     uint8_t* free_map;
+    FreeBlock* free_list;
 } MediaAllocator;
 
 MediaAllocator* create_media_allocator(size_t total_size, size_t alignment);
@@ -90,6 +98,8 @@ typedef struct {
     size_t current_usage;
     size_t peak_usage;
     size_t failed_allocations;
+    size_t allocations;
+    size_t deallocations;
     double average_allocation_size;
     double fragmentation_ratio;
 } MemoryStats;

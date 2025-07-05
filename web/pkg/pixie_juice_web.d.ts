@@ -59,6 +59,7 @@ export class WasmOptConfig {
   preserve_metadata: boolean;
   lossless: boolean;
   reduce_colors: boolean;
+  target_reduction: number;
 }
 
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
@@ -76,6 +77,8 @@ export interface InitOutput {
   readonly wasmoptconfig_set_lossless: (a: number, b: number) => void;
   readonly wasmoptconfig_reduce_colors: (a: number) => number;
   readonly wasmoptconfig_set_reduce_colors: (a: number, b: number) => void;
+  readonly wasmoptconfig_target_reduction: (a: number) => number;
+  readonly wasmoptconfig_set_target_reduction: (a: number, b: number) => void;
   readonly imageoptimizer_new: () => number;
   readonly imageoptimizer_process_image_file: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => any;
   readonly imageoptimizer_get_image_info: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];
@@ -104,9 +107,9 @@ export interface InitOutput {
   readonly __wbindgen_export_6: WebAssembly.Table;
   readonly __externref_table_dealloc: (a: number) => void;
   readonly __externref_drop_slice: (a: number, b: number) => void;
-  readonly closure2_externref_shim: (a: number, b: number, c: any) => void;
-  readonly _dyn_core__ops__function__FnMut_____Output___R_as_wasm_bindgen__closure__WasmClosure___describe__invoke__h4bf8f2f281fd2847: (a: number, b: number) => void;
-  readonly closure153_externref_shim: (a: number, b: number, c: any, d: any) => void;
+  readonly _dyn_core__ops__function__FnMut_____Output___R_as_wasm_bindgen__closure__WasmClosure___describe__invoke__ha54dc42a7a21654c: (a: number, b: number) => void;
+  readonly closure6_externref_shim: (a: number, b: number, c: any) => void;
+  readonly closure152_externref_shim: (a: number, b: number, c: any, d: any) => void;
   readonly __wbindgen_start: () => void;
 }
 

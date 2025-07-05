@@ -1,6 +1,6 @@
 //! OBJ format support using obj crate
 
-use crate::types::{OptConfig, OptError, OptResult};
+use crate::types::{OptConfig, OptResult};
 use crate::mesh::loader::{load_mesh_data, write_mesh_data};
 use crate::ffi::mesh_ffi::{decimate_mesh_safe, weld_vertices_safe};
 

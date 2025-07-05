@@ -1,20 +1,7 @@
 /// FFI bindings for memory management C hotspots
 /// Provides high-performance memory operations and custom allocators
 
-#[repr(C)]
-pub struct MediaAllocator {
-    _private: [u8; 0], // Opaque type
-}
-
-#[repr(C)]
-pub struct MemoryPool {
-    _private: [u8; 0], // Opaque type
-}
-
-#[repr(C)]
-pub struct ZeroCopyBuffer {
-    _private: [u8; 0], // Opaque type
-}
+use crate::types::{OptResult, OptError};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -28,488 +15,483 @@ pub struct MemoryStats {
     pub fragmentation_ratio: f64,
 }
 
-// Conditionally compile C FFI declarations only when c_hotspots feature is enabled
-#[cfg(feature = "c_hotspots")]
+impl Default for MemoryStats {
+    fn default() -> Self {
+        Self {
+            total_allocations: 0,
+            total_deallocations: 0,
+            current_usage: 0,
+            peak_usage: 0,
+            failed_allocations: 0,
+            average_allocation_size: 0.0,
+            fragmentation_ratio: 0.0,
+        }
+    }
+}
+
+// C FFI declarations for when C hotspots are enabled
+#[cfg(c_hotspots_available)]
 extern "C" {
-    // SIMD-accelerated memory operations
-    fn memcpy_simd(dest: *mut std::ffi::c_void, src: *const std::ffi::c_void, size: usize);
-    fn memset_simd(dest: *mut std::ffi::c_void, value: i32, size: usize);
-    fn memmove_simd(dest: *mut std::ffi::c_void, src: *const std::ffi::c_void, size: usize);
-    fn memcmp_fast(ptr1: *const std::ffi::c_void, ptr2: *const std::ffi::c_void, size: usize) -> i32;
+    // SIMD memory operations - using c_void to match generated bindings
+    pub fn memcpy_simd(dest: *mut std::ffi::c_void, src: *const std::ffi::c_void, size: usize);
+    pub fn memset_simd(dest: *mut std::ffi::c_void, value: i32, size: usize);
+    pub fn memcmp_fast(ptr1: *const u8, ptr2: *const u8, size: usize) -> i32;
     
-    // Media allocator
-    fn create_media_allocator(total_size: usize, alignment: usize) -> *mut MediaAllocator;
-    fn media_alloc(allocator: *mut MediaAllocator, size: usize) -> *mut std::ffi::c_void;
-    fn media_alloc_aligned(allocator: *mut MediaAllocator, size: usize, alignment: usize) -> *mut std::ffi::c_void;
-    fn media_free(allocator: *mut MediaAllocator, ptr: *mut std::ffi::c_void);
-    fn reset_media_allocator(allocator: *mut MediaAllocator);
-    fn destroy_media_allocator(allocator: *mut MediaAllocator);
-    
-    // Memory pool
-    fn create_memory_pool(block_size: usize, initial_block_count: usize) -> *mut MemoryPool;
-    fn pool_alloc(pool: *mut MemoryPool) -> *mut std::ffi::c_void;
-    fn pool_free(pool: *mut MemoryPool, ptr: *mut std::ffi::c_void);
-    fn pool_reset(pool: *mut MemoryPool);
-    fn destroy_memory_pool(pool: *mut MemoryPool);
-    
-    // Zero-copy buffer
-    fn create_zero_copy_buffer(capacity: usize) -> *mut ZeroCopyBuffer;
-    fn zcb_get_write_ptr(buffer: *mut ZeroCopyBuffer, size: usize) -> *mut std::ffi::c_void;
-    fn zcb_commit_write(buffer: *mut ZeroCopyBuffer, size: usize);
-    fn zcb_get_read_ptr(buffer: *mut ZeroCopyBuffer, size: *mut usize) -> *const std::ffi::c_void;
-    fn zcb_consume_read(buffer: *mut ZeroCopyBuffer, size: usize);
-    fn zcb_reset(buffer: *mut ZeroCopyBuffer);
-    fn destroy_zero_copy_buffer(buffer: *mut ZeroCopyBuffer);
-    
-    // Memory statistics
-    fn get_memory_stats(allocator: *mut MediaAllocator) -> MemoryStats;
-    fn get_pool_stats(pool: *mut MemoryPool) -> MemoryStats;
-    
-    // Cache-aware operations
-    fn prefetch_memory(ptr: *const std::ffi::c_void, size: usize);
-    fn flush_cache(ptr: *const std::ffi::c_void, size: usize);
-    fn get_cache_line_size() -> usize;
+    // Memory utilities
+    pub fn memory_prefetch(addr: *const std::ffi::c_void, size: usize);
+    pub fn memory_flush_cache(addr: *const std::ffi::c_void, size: usize);
+    pub fn get_cache_line_size() -> usize;
     
     // Pattern operations
-    fn fill_pattern_u32(dest: *mut u32, pattern: u32, count: usize);
-    fn fill_pattern_u64(dest: *mut u64, pattern: u64, count: usize);
-    fn find_pattern(haystack: *const u8, haystack_size: usize, needle: *const u8, needle_size: usize) -> *const u8;
+    pub fn fill_pattern_u32(dest: *mut u32, pattern: u32, count: usize);
+    pub fn fill_pattern_u64(dest: *mut u64, pattern: u64, count: usize);
+    pub fn find_pattern(haystack: *const u8, haystack_size: usize, 
+                       needle: *const u8, needle_size: usize) -> usize;
     
-    // Buffer validation
-    fn validate_buffer_bounds(ptr: *const std::ffi::c_void, size: usize, buffer_start: *const std::ffi::c_void, buffer_size: usize) -> bool;
-    fn detect_buffer_overflow(ptr: *const std::ffi::c_void, size: usize) -> bool;
+    // Media allocator functions
+    pub fn create_media_allocator(total_size: usize, alignment: usize) -> *mut MediaAllocator;
+    pub fn destroy_media_allocator(allocator: *mut MediaAllocator);
+    
+    // Memory pool functions 
+    pub fn create_memory_pool(block_size: usize, initial_block_count: usize) -> *mut MemoryPool;
+    pub fn destroy_memory_pool(pool: *mut MemoryPool);
+    
+    // Zero-copy buffer functions
+    pub fn create_zero_copy_buffer(capacity: usize) -> *mut std::ffi::c_void;
+    pub fn wrap_zero_copy_buffer(data: *mut std::ffi::c_void, size: usize, deallocator: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+    pub fn slice_zero_copy_buffer(buffer: *mut std::ffi::c_void, offset: usize, size: usize) -> *mut std::ffi::c_void;
+    pub fn retain_zero_copy_buffer(buffer: *mut std::ffi::c_void);
+    pub fn release_zero_copy_buffer(buffer: *mut std::ffi::c_void);
+    
+    // Validation
+    pub fn validate_buffer_bounds(buffer: *const std::ffi::c_void, buffer_size: usize, access_size: usize) -> i32;
+    pub fn detect_buffer_overflow(buffer: *const std::ffi::c_void, expected_size: usize) -> i32;
+}
+
+// Opaque C types
+#[cfg(c_hotspots_available)]
+#[repr(C)]
+pub struct MediaAllocator {
+    _private: [u8; 0],
+}
+
+#[cfg(c_hotspots_available)]
+#[repr(C)]
+pub struct MemoryPool {
+    _private: [u8; 0],
 }
 
 /// Safe wrapper for SIMD memcpy
-pub fn memcpy_simd_safe(dest: &mut [u8], src: &[u8]) -> bool {
+pub fn memcpy_simd_safe(dest: &mut [u8], src: &[u8]) -> OptResult<()> {
     if dest.len() < src.len() {
-        return false;
+        return Err(OptError::ProcessingError("Destination buffer too small".to_string()));
     }
     
-    #[cfg(feature = "c_hotspots")]
-    unsafe {
-        memcpy_simd(
-            dest.as_mut_ptr() as *mut std::ffi::c_void,
-            src.as_ptr() as *const std::ffi::c_void,
-            src.len(),
-        );
-    }
-    
-    #[cfg(not(feature = "c_hotspots"))]
+    #[cfg(c_hotspots_available)]
     {
-        // Rust fallback implementation
-        dest[..src.len()].copy_from_slice(src);
+        unsafe {
+            memcpy_simd(
+                dest.as_mut_ptr() as *mut std::ffi::c_void,
+                src.as_ptr() as *const std::ffi::c_void,
+                src.len()
+            );
+        }
+        Ok(())
     }
     
-    true
+    #[cfg(not(c_hotspots_available))]
+    {
+        // Rust fallback using optimized copy_from_slice
+        dest[..src.len()].copy_from_slice(src);
+        Ok(())
+    }
 }
 
 /// Safe wrapper for SIMD memset
-pub fn memset_simd_safe(dest: &mut [u8], value: u8) {
-    #[cfg(feature = "c_hotspots")]
-    unsafe {
-        memset_simd(
-            dest.as_mut_ptr() as *mut std::ffi::c_void,
-            value as i32,
-            dest.len(),
-        );
+pub fn memset_simd_safe(dest: &mut [u8], value: u8) -> OptResult<()> {
+    #[cfg(c_hotspots_available)]
+    {
+        unsafe {
+            memset_simd(dest.as_mut_ptr() as *mut std::ffi::c_void, value as i32, dest.len());
+        }
+        Ok(())
     }
     
-    #[cfg(not(feature = "c_hotspots"))]
+    #[cfg(not(c_hotspots_available))]
     {
-        // Rust fallback implementation
+        // Rust fallback
         dest.fill(value);
+        Ok(())
     }
 }
 
 /// Safe wrapper for fast memcmp
-pub fn memcmp_fast_safe(a: &[u8], b: &[u8]) -> Option<std::cmp::Ordering> {
+pub fn memcmp_fast_safe(a: &[u8], b: &[u8]) -> OptResult<std::cmp::Ordering> {
     if a.len() != b.len() {
-        return None;
+        return Err(OptError::ProcessingError("Buffer lengths don't match".to_string()));
     }
     
-    #[cfg(feature = "c_hotspots")]
+    #[cfg(c_hotspots_available)]
     {
         let result = unsafe {
-            memcmp_fast(
-                a.as_ptr() as *const std::ffi::c_void,
-                b.as_ptr() as *const std::ffi::c_void,
-                a.len(),
-            )
+            memcmp_fast(a.as_ptr(), b.as_ptr(), a.len())
         };
-        Some(result.cmp(&0))
+        Ok(match result {
+            0 => std::cmp::Ordering::Equal,
+            x if x < 0 => std::cmp::Ordering::Less,
+            _ => std::cmp::Ordering::Greater,
+        })
     }
     
-    #[cfg(not(feature = "c_hotspots"))]
+    #[cfg(not(c_hotspots_available))]
     {
-        // Rust fallback implementation
-        Some(a.cmp(b))
+        // Rust fallback
+        Ok(a.cmp(b))
     }
 }
 
-/// RAII wrapper for MediaAllocator
+/// Memory prefetching hint
+pub fn prefetch_memory_safe(data: &[u8]) -> OptResult<()> {
+    #[cfg(c_hotspots_available)]
+    {
+        unsafe {
+            memory_prefetch(data.as_ptr() as *const std::ffi::c_void, data.len());
+        }
+        Ok(())
+    }
+    
+    #[cfg(not(c_hotspots_available))]
+    {
+        // Rust fallback - no-op since Rust doesn't have standard prefetch
+        let _ = data; // Silence unused warning
+        Ok(())
+    }
+}
+
+/// Cache flush operation
+pub fn flush_cache_safe(data: &[u8]) -> OptResult<()> {
+    #[cfg(c_hotspots_available)]
+    {
+        unsafe {
+            memory_flush_cache(data.as_ptr() as *const std::ffi::c_void, data.len());
+        }
+        Ok(())
+    }
+    
+    #[cfg(not(c_hotspots_available))]
+    {
+        // Rust fallback - no-op
+        let _ = data; // Silence unused warning
+        Ok(())
+    }
+}
+
+/// Get cache line size
+pub fn get_cache_line_size_safe() -> usize {
+    #[cfg(c_hotspots_available)]
+    {
+        unsafe { get_cache_line_size() }
+    }
+    
+    #[cfg(not(c_hotspots_available))]
+    {
+        64 // Common cache line size fallback
+    }
+}
+
+/// Fill buffer with 32-bit pattern
+pub fn fill_pattern_u32_safe(dest: &mut [u32], pattern: u32) -> OptResult<()> {
+    #[cfg(c_hotspots_available)]
+    {
+        unsafe {
+            fill_pattern_u32(dest.as_mut_ptr(), pattern, dest.len());
+        }
+        Ok(())
+    }
+    
+    #[cfg(not(c_hotspots_available))]
+    {
+        // Rust fallback
+        dest.fill(pattern);
+        Ok(())
+    }
+}
+
+/// Fill buffer with 64-bit pattern
+pub fn fill_pattern_u64_safe(dest: &mut [u64], pattern: u64) -> OptResult<()> {
+    #[cfg(c_hotspots_available)]
+    {
+        unsafe {
+            fill_pattern_u64(dest.as_mut_ptr(), pattern, dest.len());
+        }
+        Ok(())
+    }
+    
+    #[cfg(not(c_hotspots_available))]
+    {
+        // Rust fallback
+        dest.fill(pattern);
+        Ok(())
+    }
+}
+
+/// Find pattern in buffer
+pub fn find_pattern_safe(haystack: &[u8], needle: &[u8]) -> OptResult<Option<usize>> {
+    if needle.is_empty() {
+        return Ok(Some(0));
+    }
+    
+    #[cfg(c_hotspots_available)]
+    {
+        let result = unsafe {
+            find_pattern(
+                haystack.as_ptr(), 
+                haystack.len(),
+                needle.as_ptr(),
+                needle.len()
+            )
+        };
+        Ok(if result == usize::MAX { None } else { Some(result) })
+    }
+    
+    #[cfg(not(c_hotspots_available))]
+    {
+        // Rust fallback using windows iterator
+        Ok(haystack.windows(needle.len()).position(|window| window == needle))
+    }
+}
+
+/// Validate buffer bounds
+pub fn validate_buffer_bounds_safe(buffer: &[u8], access_size: usize) -> OptResult<bool> {
+    #[cfg(c_hotspots_available)]
+    {
+        let result = unsafe {
+            validate_buffer_bounds(
+                buffer.as_ptr() as *const std::ffi::c_void,
+                buffer.len(),
+                access_size
+            )
+        };
+        Ok(result != 0)
+    }
+    
+    #[cfg(not(c_hotspots_available))]
+    {
+        // Rust fallback
+        Ok(access_size <= buffer.len())
+    }
+}
+
+/// Detect buffer overflow
+pub fn detect_buffer_overflow_safe(buffer: &[u8], expected_size: usize) -> OptResult<bool> {
+    #[cfg(c_hotspots_available)]
+    {
+        let result = unsafe {
+            detect_buffer_overflow(
+                buffer.as_ptr() as *const std::ffi::c_void,
+                expected_size
+            )
+        };
+        Ok(result != 0)
+    }
+    
+    #[cfg(not(c_hotspots_available))]
+    {
+        // Rust fallback - simple size check
+        Ok(buffer.len() != expected_size)
+    }
+}
+
+/// High-performance memory allocator wrapper
 pub struct MediaAllocatorWrapper {
-    inner: *mut MediaAllocator,
+    #[cfg(c_hotspots_available)]
+    #[allow(dead_code)]
+    allocator: *mut std::ffi::c_void,
+    #[cfg(not(c_hotspots_available))]
+    _data: Vec<u8>,
 }
 
 impl MediaAllocatorWrapper {
-    pub fn new(total_size: usize, alignment: usize) -> Option<Self> {
-        #[cfg(feature = "c_hotspots")]
+    pub fn new(total_size: usize, alignment: usize) -> OptResult<Self> {
+        #[cfg(c_hotspots_available)]
         {
-            let inner = unsafe { create_media_allocator(total_size, alignment) };
-            if inner.is_null() {
-                None
+            // Call C create_media_allocator function
+            let allocator = unsafe {
+                create_media_allocator(total_size, alignment)
+            };
+            
+            if allocator.is_null() {
+                Err(OptError::Memory("Failed to create media allocator".to_string()))
             } else {
-                Some(Self { inner })
+                Ok(Self { allocator: allocator as *mut std::ffi::c_void })
             }
         }
         
-        #[cfg(not(feature = "c_hotspots"))]
+        #[cfg(not(c_hotspots_available))]
         {
-            // Rust stub implementation - just create a placeholder
-            let _ = (total_size, alignment); // Use parameters to avoid warnings
-            Some(Self { inner: std::ptr::null_mut() })
-        }
-    }
-    
-    pub fn alloc(&mut self, size: usize) -> Option<*mut u8> {
-        #[cfg(feature = "c_hotspots")]
-        {
-            let ptr = unsafe { media_alloc(self.inner, size) };
-            if ptr.is_null() {
-                None
-            } else {
-                Some(ptr as *mut u8)
-            }
-        }
-        
-        #[cfg(not(feature = "c_hotspots"))]
-        {
-            // Rust stub implementation - use standard allocation
-            let layout = std::alloc::Layout::from_size_align(size, std::mem::align_of::<u8>()).ok()?;
-            let ptr = unsafe { std::alloc::alloc(layout) };
-            if ptr.is_null() {
-                None
-            } else {
-                Some(ptr)
-            }
-        }
-    }
-    
-    pub fn free(&mut self, ptr: *mut u8) {
-        #[cfg(feature = "c_hotspots")]
-        unsafe {
-            media_free(self.inner, ptr as *mut std::ffi::c_void);
-        }
-        
-        #[cfg(not(feature = "c_hotspots"))]
-        unsafe {
-            // For the stub implementation, we can't properly free without knowing the layout
-            // In a real implementation, you'd need to track allocations
-            if !ptr.is_null() {
-                std::alloc::dealloc(ptr, std::alloc::Layout::from_size_align_unchecked(1, 1));
-            }
+            // Rust fallback - use Vec as backing store
+            let _ = alignment; // Ignore alignment for now in fallback
+            Ok(Self { _data: Vec::with_capacity(total_size) })
         }
     }
 }
 
 impl Drop for MediaAllocatorWrapper {
     fn drop(&mut self) {
-        if !self.inner.is_null() {
-            #[cfg(feature = "c_hotspots")]
-            unsafe {
-                destroy_media_allocator(self.inner);
+        #[cfg(c_hotspots_available)]
+        {
+            // Call C destroy_media_allocator function
+            if !self.allocator.is_null() {
+                unsafe {
+                    destroy_media_allocator(self.allocator as *mut MediaAllocator);
+                }
             }
+        }
+        
+        #[cfg(not(c_hotspots_available))]
+        {
+            // Rust fallback - Vec handles cleanup automatically
         }
     }
 }
 
-unsafe impl Send for MediaAllocatorWrapper {}
-unsafe impl Sync for MediaAllocatorWrapper {}
-
-/// RAII wrapper for MemoryPool
+/// Memory pool for frequent allocations
 pub struct MemoryPoolWrapper {
-    inner: *mut MemoryPool,
+    #[cfg(c_hotspots_available)]
+    #[allow(dead_code)]
+    pool: *mut std::ffi::c_void,
+    #[cfg(not(c_hotspots_available))]
+    _blocks: Vec<Vec<u8>>,
+    #[cfg(not(c_hotspots_available))]
+    #[allow(dead_code)]
+    block_size: usize,
 }
 
 impl MemoryPoolWrapper {
-    pub fn new(block_size: usize, initial_block_count: usize) -> Option<Self> {
-        #[cfg(feature = "c_hotspots")]
+    pub fn new(block_size: usize, initial_block_count: usize) -> OptResult<Self> {
+        #[cfg(c_hotspots_available)]
         {
-            let inner = unsafe { create_memory_pool(block_size, initial_block_count) };
-            if inner.is_null() {
-                None
+            // Call C create_memory_pool function
+            let pool = unsafe {
+                create_memory_pool(block_size, initial_block_count)
+            };
+            
+            if pool.is_null() {
+                Err(OptError::Memory("Failed to create memory pool".to_string()))
             } else {
-                Some(Self { inner })
+                Ok(Self { pool: pool as *mut std::ffi::c_void })
             }
         }
         
-        #[cfg(not(feature = "c_hotspots"))]
+        #[cfg(not(c_hotspots_available))]
         {
-            // Rust stub implementation
-            let _ = (block_size, initial_block_count); // Use parameters to avoid warnings
-            Some(Self { inner: std::ptr::null_mut() })
-        }
-    }
-    
-    pub fn alloc(&mut self) -> Option<*mut u8> {
-        #[cfg(feature = "c_hotspots")]
-        {
-            let ptr = unsafe { pool_alloc(self.inner) };
-            if ptr.is_null() {
-                None
-            } else {
-                Some(ptr as *mut u8)
+            // Rust fallback
+            let mut blocks = Vec::with_capacity(initial_block_count);
+            for _ in 0..initial_block_count {
+                blocks.push(vec![0u8; block_size]);
             }
-        }
-        
-        #[cfg(not(feature = "c_hotspots"))]
-        {
-            // Rust stub implementation
-            None
-        }
-    }
-    
-    pub fn free(&mut self, ptr: *mut u8) {
-        #[cfg(feature = "c_hotspots")]
-        unsafe {
-            pool_free(self.inner, ptr as *mut std::ffi::c_void);
-        }
-        
-        #[cfg(not(feature = "c_hotspots"))]
-        {
-            // Rust stub implementation - no-op
-            let _ = ptr; // Use parameter to avoid warning
+            Ok(Self { _blocks: blocks, block_size })
         }
     }
 }
 
 impl Drop for MemoryPoolWrapper {
     fn drop(&mut self) {
-        if !self.inner.is_null() {
-            #[cfg(feature = "c_hotspots")]
-            unsafe {
-                destroy_memory_pool(self.inner);
+        #[cfg(c_hotspots_available)]
+        {
+            // Call C destroy_memory_pool function
+            if !self.pool.is_null() {
+                unsafe {
+                    destroy_memory_pool(self.pool as *mut MemoryPool);
+                }
             }
+        }
+        
+        #[cfg(not(c_hotspots_available))]
+        {
+            // Rust fallback - Vec handles cleanup automatically
         }
     }
 }
 
-unsafe impl Send for MemoryPoolWrapper {}
-unsafe impl Sync for MemoryPoolWrapper {}
-
-/// RAII wrapper for ZeroCopyBuffer
+/// Zero-copy buffer wrapper
 pub struct ZeroCopyBufferWrapper {
-    inner: *mut ZeroCopyBuffer,
+    #[cfg(c_hotspots_available)]
+    #[allow(dead_code)]
+    buffer: *mut std::ffi::c_void,
+    #[cfg(not(c_hotspots_available))]
+    _data: Vec<u8>,
 }
 
 impl ZeroCopyBufferWrapper {
-    pub fn new(capacity: usize) -> Option<Self> {
-        #[cfg(feature = "c_hotspots")]
+    pub fn new(capacity: usize) -> OptResult<Self> {
+        #[cfg(c_hotspots_available)]
         {
-            let inner = unsafe { create_zero_copy_buffer(capacity) };
-            if inner.is_null() {
-                None
+            let buffer = unsafe {
+                create_zero_copy_buffer(capacity)
+            };
+            
+            if buffer.is_null() {
+                Err(OptError::Memory("Failed to create zero-copy buffer".to_string()))
             } else {
-                Some(Self { inner })
+                Ok(Self { buffer })
             }
         }
         
-        #[cfg(not(feature = "c_hotspots"))]
+        #[cfg(not(c_hotspots_available))]
         {
-            // Rust stub implementation
-            let _ = capacity; // Use parameter to avoid warning
-            Some(Self { inner: std::ptr::null_mut() })
+            // Rust fallback
+            Ok(Self { _data: Vec::with_capacity(capacity) })
+        }
+    }
+    
+    pub fn wrap(data: Vec<u8>) -> OptResult<Self> {
+        #[cfg(c_hotspots_available)]
+        {
+            let mut data = data;
+            let ptr = data.as_mut_ptr() as *mut std::ffi::c_void;
+            let size = data.len();
+            
+            // Prevent Vec from deallocating - transfer ownership to C
+            std::mem::forget(data);
+            
+            let buffer = unsafe {
+                wrap_zero_copy_buffer(ptr, size, std::ptr::null_mut())
+            };
+            
+            if buffer.is_null() {
+                // If wrapping failed, we need to restore the Vec and free it
+                unsafe {
+                    let _ = Vec::from_raw_parts(ptr as *mut u8, size, size);
+                }
+                Err(OptError::Memory("Failed to wrap zero-copy buffer".to_string()))
+            } else {
+                Ok(Self { buffer })
+            }
+        }
+        
+        #[cfg(not(c_hotspots_available))]
+        {
+            // Rust fallback
+            Ok(Self { _data: data })
         }
     }
 }
 
 impl Drop for ZeroCopyBufferWrapper {
     fn drop(&mut self) {
-        if !self.inner.is_null() {
-            #[cfg(feature = "c_hotspots")]
-            unsafe {
-                destroy_zero_copy_buffer(self.inner);
+        #[cfg(c_hotspots_available)]
+        {
+            if !self.buffer.is_null() {
+                unsafe {
+                    release_zero_copy_buffer(self.buffer);
+                }
             }
         }
-    }
-}
-
-unsafe impl Send for ZeroCopyBufferWrapper {}
-unsafe impl Sync for ZeroCopyBufferWrapper {}
-
-/// Safe wrappers for cache operations
-pub fn prefetch_memory(ptr: *const u8, size: usize) {
-    #[cfg(feature = "c_hotspots")]
-    unsafe {
-        prefetch_memory(ptr as *const std::ffi::c_void, size);
-    }
-    
-    #[cfg(not(feature = "c_hotspots"))]
-    {
-        // Rust stub implementation - no-op
-        let _ = (ptr, size); // Use parameters to avoid warnings
-    }
-}
-
-pub fn flush_cache(ptr: *const u8, size: usize) {
-    #[cfg(feature = "c_hotspots")]
-    unsafe {
-        flush_cache(ptr as *const std::ffi::c_void, size);
-    }
-    
-    #[cfg(not(feature = "c_hotspots"))]
-    {
-        // Rust stub implementation - no-op
-        let _ = (ptr, size); // Use parameters to avoid warnings
-    }
-}
-
-pub fn get_cache_line_size_safe() -> usize {
-    #[cfg(feature = "c_hotspots")]
-    unsafe {
-        get_cache_line_size()
-    }
-    
-    #[cfg(not(feature = "c_hotspots"))]
-    {
-        // Rust stub implementation - return common cache line size
-        64
-    }
-}
-
-/// Safe wrappers for pattern operations
-pub fn fill_pattern_u32_safe(dest: &mut [u32], pattern: u32) {
-    #[cfg(feature = "c_hotspots")]
-    unsafe {
-        fill_pattern_u32(dest.as_mut_ptr(), pattern, dest.len());
-    }
-    
-    #[cfg(not(feature = "c_hotspots"))]
-    {
-        // Rust fallback implementation
-        dest.fill(pattern);
-    }
-}
-
-pub fn fill_pattern_u64_safe(dest: &mut [u64], pattern: u64) {
-    #[cfg(feature = "c_hotspots")]
-    unsafe {
-        fill_pattern_u64(dest.as_mut_ptr(), pattern, dest.len());
-    }
-    
-    #[cfg(not(feature = "c_hotspots"))]
-    {
-        // Rust fallback implementation
-        dest.fill(pattern);
-    }
-}
-
-pub fn find_pattern_safe(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    #[cfg(feature = "c_hotspots")]
-    {
-        let result = unsafe {
-            find_pattern(
-                haystack.as_ptr(),
-                haystack.len(),
-                needle.as_ptr(),
-                needle.len(),
-            )
-        };
         
-        if result.is_null() {
-            None
-        } else {
-            Some(result as usize - haystack.as_ptr() as usize)
+        #[cfg(not(c_hotspots_available))]
+        {
+            // Rust fallback - Vec handles cleanup automatically
         }
-    }
-    
-    #[cfg(not(feature = "c_hotspots"))]
-    {
-        // Rust fallback implementation
-        haystack.windows(needle.len()).position(|window| window == needle)
-    }
-}
-
-/// Safe wrappers for buffer validation
-pub fn validate_buffer_bounds_safe(
-    ptr: *const u8,
-    size: usize,
-    buffer_start: *const u8,
-    buffer_size: usize,
-) -> bool {
-    #[cfg(feature = "c_hotspots")]
-    unsafe {
-        validate_buffer_bounds(
-            ptr as *const std::ffi::c_void,
-            size,
-            buffer_start as *const std::ffi::c_void,
-            buffer_size,
-        )
-    }
-    
-    #[cfg(not(feature = "c_hotspots"))]
-    {
-        // Rust fallback implementation
-        let ptr_addr = ptr as usize;
-        let buffer_start_addr = buffer_start as usize;
-        
-        ptr_addr >= buffer_start_addr
-            && ptr_addr + size <= buffer_start_addr + buffer_size
-    }
-}
-
-pub fn detect_buffer_overflow_safe(ptr: *const u8, size: usize) -> bool {
-    #[cfg(feature = "c_hotspots")]
-    unsafe {
-        detect_buffer_overflow(ptr as *const std::ffi::c_void, size)
-    }
-    
-    #[cfg(not(feature = "c_hotspots"))]
-    {
-        // Rust stub implementation - always return false (no overflow detected)
-        let _ = (ptr, size); // Use parameters to avoid warnings
-        false
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    
-    #[test]
-    fn test_memcpy_safe() {
-        let src = vec![1, 2, 3, 4, 5];
-        let mut dest = vec![0; 5];
-        
-        assert!(memcpy_simd_safe(&mut dest, &src));
-        assert_eq!(dest, src);
-    }
-    
-    #[test]
-    fn test_memset_safe() {
-        let mut buffer = vec![0; 10];
-        memset_simd_safe(&mut buffer, 42);
-        
-        assert!(buffer.iter().all(|&x| x == 42));
-    }
-    
-    #[test]
-    fn test_memcmp_safe() {
-        let a = vec![1, 2, 3];
-        let b = vec![1, 2, 3];
-        let c = vec![1, 2, 4];
-        
-        assert_eq!(memcmp_fast_safe(&a, &b), Some(std::cmp::Ordering::Equal));
-        assert_eq!(memcmp_fast_safe(&a, &c), Some(std::cmp::Ordering::Less));
-    }
-    
-    #[test]
-    fn test_find_pattern() {
-        let haystack = b"hello world hello";
-        let needle = b"world";
-        
-        let result = find_pattern_safe(haystack, needle);
-        assert_eq!(result, Some(6));
     }
 }

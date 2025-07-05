@@ -1,7 +1,7 @@
 //! Mesh validation functionality
 
 use crate::ffi::mesh_ffi::MeshData;
-use crate::types::{OptError, OptResult};
+use crate::types::OptResult;
 
 /// Validation report containing errors and warnings
 #[derive(Debug, Clone)]
@@ -132,10 +132,11 @@ mod tests {
     #[test]
     fn test_valid_mesh() {
         let validator = MeshValidator::new();
-        let mesh = MeshData {
-            vertices: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
-            indices: vec![0, 1, 2],
-        };
+        let mut mesh = MeshData::new();
+        mesh.vertices = vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+        mesh.indices = vec![0, 1, 2];
+        mesh.vertex_count = 3;
+        mesh.index_count = 3;
 
         let report = validator.validate(&mesh).unwrap();
         assert!(report.is_valid);
@@ -145,10 +146,11 @@ mod tests {
     #[test]
     fn test_invalid_mesh_vertex_count() {
         let validator = MeshValidator::new();
-        let mesh = MeshData {
-            vertices: vec![0.0, 0.0], // Only 2 values, not divisible by 3
-            indices: vec![0],
-        };
+        let mut mesh = MeshData::new();
+        mesh.vertices = vec![0.0, 0.0]; // Only 2 values, not divisible by 3
+        mesh.indices = vec![0];
+        mesh.vertex_count = 2;
+        mesh.index_count = 1;
 
         let report = validator.validate(&mesh).unwrap();
         assert!(!report.is_valid);
@@ -158,10 +160,11 @@ mod tests {
     #[test]
     fn test_out_of_bounds_index() {
         let validator = MeshValidator::new();
-        let mesh = MeshData {
-            vertices: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
-            indices: vec![0, 1, 5], // Index 5 is out of bounds (only 3 vertices)
-        };
+        let mut mesh = MeshData::new();
+        mesh.vertices = vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+        mesh.indices = vec![0, 1, 5]; // Index 5 is out of bounds (only 3 vertices)
+        mesh.vertex_count = 3;
+        mesh.index_count = 3;
 
         let report = validator.validate(&mesh).unwrap();
         assert!(!report.is_valid);

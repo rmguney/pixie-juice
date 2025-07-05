@@ -34,6 +34,7 @@ pub struct WasmOptConfig {
     preserve_metadata: bool,
     lossless: bool,
     reduce_colors: bool,
+    target_reduction: f32,  // Target reduction ratio (0.0-1.0)
 }
 
 #[wasm_bindgen]
@@ -42,9 +43,10 @@ impl WasmOptConfig {
     pub fn new() -> WasmOptConfig {
         WasmOptConfig {
             quality: 85,
-            preserve_metadata: true,
+            preserve_metadata: false,  // Default to removing metadata for better compression
             lossless: false,
             reduce_colors: false,
+            target_reduction: 0.0,  // No specific reduction target by default
         }
     }
 
@@ -66,7 +68,14 @@ impl WasmOptConfig {
     #[wasm_bindgen(getter)]
     pub fn reduce_colors(&self) -> bool { self.reduce_colors }
     #[wasm_bindgen(setter)]
-    pub fn set_reduce_colors(&mut self, reduce: bool) { self.reduce_colors = reduce; }
+    pub fn set_reduce_colors(&mut self, reduce_colors: bool) { self.reduce_colors = reduce_colors; }
+
+    #[wasm_bindgen(getter)]
+    pub fn target_reduction(&self) -> f32 { self.target_reduction }
+    #[wasm_bindgen(setter)]
+    pub fn set_target_reduction(&mut self, target_reduction: f32) { 
+        self.target_reduction = target_reduction.clamp(0.0, 1.0); 
+    }
 }
 
 impl From<&WasmOptConfig> for CoreOptConfig {
@@ -78,7 +87,11 @@ impl From<&WasmOptConfig> for CoreOptConfig {
             preserve_metadata: Some(wasm_config.preserve_metadata),
             fast_mode: None,
             reduce_colors: Some(wasm_config.reduce_colors),
-            target_reduction: None,
+            target_reduction: if wasm_config.target_reduction > 0.0 { 
+                Some(wasm_config.target_reduction) 
+            } else { 
+                None 
+            },
             max_width: None,
             max_height: None,
         }
@@ -421,5 +434,6 @@ pub fn supported_mesh_formats() -> Vec<JsValue> {
         JsValue::from_str("glb"),
         JsValue::from_str("dae"),
         JsValue::from_str("fbx"),
+        JsValue::from_str("usdz"),
     ]
 }

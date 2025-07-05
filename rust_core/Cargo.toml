@@ -26,6 +26,7 @@ stl_io = { workspace = true }
 meshopt = { workspace = true, optional = true }
 quick-xml = { workspace = true }
 serde-xml-rs = { workspace = true, optional = true }
+zip = { workspace = true, optional = true }
 
 # Video processing (optional for Windows builds)
 ffmpeg-next = { workspace = true, optional = true }
@@ -42,17 +43,18 @@ thiserror = { workspace = true }
 log = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+toml = { workspace = true }
 
 # Platform-specific dependencies (not available in WASM)
 colored = { workspace = true, optional = true }
 dirs = { workspace = true, optional = true }
 
 [features]
-default = ["full"]
-full = ["oxipng", "webp", "gif", "imageproc", "gltf", "meshopt", "flate2", "lz4_flex", "zstd", "serde-xml-rs", "mp4parse", "colored", "dirs"]
-native = ["mozjpeg-sys", "colored", "dirs"]
+default = ["full", "c_hotspots"]
+full = ["oxipng", "webp", "gif", "imageproc", "gltf", "meshopt", "flate2", "lz4_flex", "zstd", "serde-xml-rs", "mp4parse", "colored", "dirs", "zip"]
+native = ["mozjpeg-sys", "colored", "dirs", "c_hotspots"]
 video = ["ffmpeg-next"]
-wasm = ["color_quant", "gif", "gltf"]  # WASM-compatible features (without oxipng/webp due to C dependencies)
+wasm = ["color_quant", "gif", "gltf", "c_hotspots"]  # WASM-compatible features including C hotspots
 c_hotspots = []  # Enable C performance hotspots
 
 # Build dependencies for C integration

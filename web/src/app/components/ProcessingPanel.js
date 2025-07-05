@@ -4,7 +4,9 @@ import { useState, useCallback } from 'react';
 
 export default function ProcessingPanel({ files, wasm, onProcess, setIsProcessing }) {
   const [quality, setQuality] = useState(85);
+  const [targetReduction, setTargetReduction] = useState(40); // Target reduction percentage
   const [outputFormat, setOutputFormat] = useState('auto');
+  const [preserveMetadata, setPreserveMetadata] = useState(false); // Metadata preservation
   const [progress, setProgress] = useState(0);
   const [currentFile, setCurrentFile] = useState('');
   const [isProcessing, setLocalProcessing] = useState(false);
@@ -28,10 +30,23 @@ export default function ProcessingPanel({ files, wasm, onProcess, setIsProcessin
           // Read file as bytes
           const fileData = await readFileAsBytes(file);
 
-          // Create config
+          // Create config with aggressive settings
           const config = new wasm.WasmOptConfig();
-          config.quality = quality;
-          config.preserve_metadata = true;
+          
+          // Map quality slider to aggressive compression
+          if (quality <= 30) {
+            config.quality = quality;
+            config.target_reduction = Math.max(targetReduction / 100, 0.6); // Very aggressive
+          } else if (quality <= 60) {
+            config.quality = quality;
+            config.target_reduction = Math.max(targetReduction / 100, 0.4); // Aggressive
+          } else {
+            config.quality = quality;
+            config.target_reduction = targetReduction / 100; // Use specified target
+          }
+          
+          config.preserve_metadata = preserveMetadata; // Use user setting for metadata preservation
+          config.lossless = false; // Use lossy compression for better reduction
 
           let optimizedData;
           let targetFormat;
@@ -101,7 +116,7 @@ export default function ProcessingPanel({ files, wasm, onProcess, setIsProcessin
       setProgress(0);
       setCurrentFile('');
     }
-  }, [files, wasm, quality, outputFormat, onProcess, setIsProcessing]);
+  }, [files, wasm, quality, targetReduction, outputFormat, onProcess, setIsProcessing]);
 
   // Helper function to read file as bytes
   const readFileAsBytes = (file) => {
@@ -148,7 +163,7 @@ export default function ProcessingPanel({ files, wasm, onProcess, setIsProcessin
   }
 
   return (
-    <div className="border border-neutral-800 rounded-lg overflow-hidden">
+    <div className="rounded-lg overflow-hidden">
       <div className="p-4 border-b border-neutral-800">
         <h3 className="text-sm font-normal text-white">Settings</h3>
       </div>
@@ -171,6 +186,32 @@ export default function ProcessingPanel({ files, wasm, onProcess, setIsProcessin
             onChange={(e) => setQuality(parseInt(e.target.value))}
             className="w-full h-2"
           />
+          <div className="text-xs text-neutral-500 mt-1">
+            {quality <= 30 ? "Maximum compression (may affect quality)" : 
+             quality <= 60 ? "High compression" : "Balanced"}
+          </div>
+        </div>
+
+        {/* Target Reduction Slider */}
+        <div>
+          <div className="flex items-center justify-between mb-1.5">
+            <label htmlFor="reduction" className="text-xs text-neutral-400">
+              Target Reduction
+            </label>
+            <span className="text-xs font-mono text-white">{targetReduction}%</span>
+          </div>
+          <input
+            id="reduction"
+            type="range"
+            min="10"
+            max="80"
+            value={targetReduction}
+            onChange={(e) => setTargetReduction(parseInt(e.target.value))}
+            className="w-full h-2"
+          />
+          <div className="text-xs text-neutral-500 mt-1">
+            Target file size reduction
+          </div>
         </div>
 
         {/* Output Format */}
@@ -189,6 +230,24 @@ export default function ProcessingPanel({ files, wasm, onProcess, setIsProcessin
             <option value="jpeg">JPEG</option>
             <option value="webp">WebP</option>
           </select>
+        </div>
+
+        {/* Metadata Preservation */}
+        <div>
+          <label className="flex items-center space-x-3 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={preserveMetadata}
+              onChange={(e) => setPreserveMetadata(e.target.checked)}
+              className="w-4 h-4 bg-black border border-neutral-800 rounded focus:ring-1 focus:ring-neutral-600 text-white"
+            />
+            <div className="text-xs">
+              <div className="text-neutral-400">Preserve Metadata</div>
+              <div className="text-neutral-500 text-xs">
+                Keep EXIF, XMP, and other metadata (larger file size)
+              </div>
+            </div>
+          </label>
         </div>
 
         {/* Process Button */}

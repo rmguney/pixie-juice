@@ -1,13 +1,255 @@
 #include "image_kernel.h"
 #include "util.h"
-#include <stdlib.h>
-#include <string.h>
-#include <math.h>
+
+// Only include standard headers for native builds
+#ifndef __wasm__
+    #include <stdlib.h>
+    #include <string.h>
+    #include <math.h>
+#endif
 
 #ifdef _MSC_VER
-#include <intrin.h>
+    #ifndef __wasm__
+        #include <intrin.h>
+    #endif
 #else
-#include <x86intrin.h>
+    #ifndef __wasm__
+        #include <x86intrin.h>
+    #endif
+#endif
+
+// WASM-compatible implementations
+#ifdef __wasm__
+    // Math functions for WASM
+    static inline double sqrt(double x) {
+        if (x < 0.0) return 0.0;
+        if (x == 0.0) return 0.0;
+        double guess = x * 0.5;
+        for (int i = 0; i < 10; i++) {
+            guess = (guess + x / guess) * 0.5;
+        }
+        return guess;
+    }
+    
+    static inline double pow(double base, double exp) {
+        if (exp == 0.0) return 1.0;
+        if (exp == 1.0) return base;
+        if (exp == 2.0) return base * base;
+        // Simplified power function for common cases
+        double result = 1.0;
+        for (int i = 0; i < (int)exp && i < 10; i++) {
+            result *= base;
+        }
+        return result;
+    }
+    
+    static inline float expf(float x) {
+        // Simple exponential approximation: e^x ≈ 1 + x + x²/2! + x³/3! + ...
+        if (x > 10.0f) return 22026.5f; // e^10 ≈ 22026
+        if (x < -10.0f) return 0.0f;
+        
+        float result = 1.0f;
+        float term = 1.0f;
+        for (int i = 1; i <= 8; i++) {
+            term *= x / i;
+            result += term;
+        }
+        return result;
+    }
+    
+    static inline float sqrtf(float x) {
+        if (x < 0.0f) return 0.0f;
+        if (x == 0.0f) return 0.0f;
+        float guess = x * 0.5f;
+        for (int i = 0; i < 10; i++) {
+            guess = (guess + x / guess) * 0.5f;
+        }
+        return guess;
+    }
+    
+    static inline float powf(float base, float exp) {
+        if (exp == 0.0f) return 1.0f;
+        if (exp == 1.0f) return base;
+        if (exp == 2.0f) return base * base;
+        // Simplified power function for common cases
+        float result = 1.0f;
+        for (int i = 0; i < (int)exp && i < 10; i++) {
+            result *= base;
+        }
+        return result;
+    }
+    
+    // Memory operations for WASM
+    static void* memcpy_wasm(void* dest, const void* src, size_t n) {
+        char* d = (char*)dest;
+        const char* s = (const char*)src;
+        for (size_t i = 0; i < n; i++) {
+            d[i] = s[i];
+        }
+        return dest;
+    }
+    
+    static void* memset_wasm(void* s, int c, size_t n) {
+        char* p = (char*)s;
+        for (size_t i = 0; i < n; i++) {
+            p[i] = (char)c;
+        }
+        return s;
+    }
+    
+    // Memory allocation for WASM (simple static buffers)
+    static char wasm_buffer[1024 * 1024]; // 1MB buffer
+    static size_t wasm_buffer_offset = 0;
+    
+    static void* malloc_wasm(size_t size) {
+        if (wasm_buffer_offset + size > sizeof(wasm_buffer)) {
+            return 0; // Out of memory
+        }
+        void* ptr = &wasm_buffer[wasm_buffer_offset];
+        wasm_buffer_offset += (size + 7) & ~7; // 8-byte align
+        return ptr;
+    }
+    
+    static void* calloc_wasm(size_t count, size_t size) {
+        size_t total = count * size;
+        void* ptr = malloc_wasm(total);
+        if (ptr) {
+            memset_wasm(ptr, 0, total);
+        }
+        return ptr;
+    }
+    
+    static void free_wasm(void* ptr) {
+        // Simple implementation - no actual freeing
+        (void)ptr;
+    }
+    
+    // Sorting function for WASM
+    static void qsort_wasm(void* base, size_t num, size_t size, int (*cmp)(const void*, const void*)) {
+        // Simple bubble sort for WASM
+        char* array = (char*)base;
+        for (size_t i = 0; i < num - 1; i++) {
+            for (size_t j = 0; j < num - i - 1; j++) {
+                if (cmp(array + j * size, array + (j + 1) * size) > 0) {
+                    // Swap elements
+                    for (size_t k = 0; k < size; k++) {
+                        char temp = array[j * size + k];
+                        array[j * size + k] = array[(j + 1) * size + k];
+                        array[(j + 1) * size + k] = temp;
+                    }
+                }
+            }
+        }
+    }
+    
+    // WASM SIMD support (if available)
+    #ifdef __wasm_simd128__
+        #include <wasm_simd128.h>
+        
+        // WASM SIMD wrapper types to match x86 interface
+        typedef v128_t __m128i;
+        typedef v128_t __m128;
+        
+        // Integer SIMD intrinsics
+        static inline __m128i _mm_set_epi32(int e3, int e2, int e1, int e0) {
+            return wasm_i32x4_make(e0, e1, e2, e3);
+        }
+        
+        static inline __m128i _mm_sub_epi32(__m128i a, __m128i b) {
+            return wasm_i32x4_sub(a, b);
+        }
+        
+        static inline __m128i _mm_mullo_epi32(__m128i a, __m128i b) {
+            return wasm_i32x4_mul(a, b);
+        }
+        
+        static inline __m128i _mm_add_epi32(__m128i a, __m128i b) {
+            return wasm_i32x4_add(a, b);
+        }
+        
+        static inline int _mm_extract_epi32(__m128i a, int imm) {
+            // WASM requires compile-time constants
+            switch (imm & 3) {
+                case 0: return wasm_i32x4_extract_lane(a, 0);
+                case 1: return wasm_i32x4_extract_lane(a, 1);
+                case 2: return wasm_i32x4_extract_lane(a, 2);
+                case 3: return wasm_i32x4_extract_lane(a, 3);
+                default: return wasm_i32x4_extract_lane(a, 0);
+            }
+        }
+        
+        // Float SIMD intrinsics
+        static inline __m128 _mm_set_ps(float e3, float e2, float e1, float e0) {
+            return wasm_f32x4_make(e0, e1, e2, e3);
+        }
+        
+        static inline __m128 _mm_set1_ps(float a) {
+            return wasm_f32x4_splat(a);
+        }
+        
+        static inline __m128 _mm_setzero_ps(void) {
+            return wasm_f32x4_splat(0.0f);
+        }
+        
+        static inline __m128 _mm_add_ps(__m128 a, __m128 b) {
+            return wasm_f32x4_add(a, b);
+        }
+        
+        static inline __m128 _mm_sub_ps(__m128 a, __m128 b) {
+            return wasm_f32x4_sub(a, b);
+        }
+        
+        static inline __m128 _mm_mul_ps(__m128 a, __m128 b) {
+            return wasm_f32x4_mul(a, b);
+        }
+        
+        static inline __m128 _mm_div_ps(__m128 a, __m128 b) {
+            return wasm_f32x4_div(a, b);
+        }
+        
+        static inline void _mm_store_ps(float* mem_addr, __m128 a) {
+            wasm_v128_store(mem_addr, a);
+        }
+        
+        static inline __m128 _mm_load_ps(const float* mem_addr) {
+            return wasm_v128_load(mem_addr);
+        }
+        
+        static inline float _mm_cvtss_f32(__m128 a) {
+            return wasm_f32x4_extract_lane(a, 0);
+        }
+        
+        // Horizontal add emulation for WASM
+        static inline __m128 _mm_hadd_ps(__m128 a, __m128 b) {
+            // Simple horizontal add approximation
+            float a0 = wasm_f32x4_extract_lane(a, 0) + wasm_f32x4_extract_lane(a, 1);
+            float a1 = wasm_f32x4_extract_lane(a, 2) + wasm_f32x4_extract_lane(a, 3);
+            float b0 = wasm_f32x4_extract_lane(b, 0) + wasm_f32x4_extract_lane(b, 1);
+            float b1 = wasm_f32x4_extract_lane(b, 2) + wasm_f32x4_extract_lane(b, 3);
+            return wasm_f32x4_make(a0, a1, b0, b1);
+        }
+        
+        // Dot product emulation for WASM (duplicate from math_kernel.c)
+        static inline __m128 _mm_dp_ps(__m128 a, __m128 b, unsigned int mask) {
+            // For simplicity, just do a basic dot product and splat
+            __m128 mul = wasm_f32x4_mul(a, b);
+            float result = wasm_f32x4_extract_lane(mul, 0) + 
+                          wasm_f32x4_extract_lane(mul, 1) + 
+                          wasm_f32x4_extract_lane(mul, 2) + 
+                          wasm_f32x4_extract_lane(mul, 3);
+            return wasm_f32x4_splat(result);
+        }
+    #endif
+    
+    // Constants for WASM
+    #define INT_MAX 2147483647
+    
+    #define memcpy memcpy_wasm
+    #define memset memset_wasm
+    #define malloc malloc_wasm
+    #define calloc calloc_wasm
+    #define free free_wasm
+    #define qsort qsort_wasm
 #endif
 
 // Octree node for color quantization
@@ -26,6 +268,10 @@ static int has_sse = -1;
 
 static void detect_simd_features() {
     if (has_sse == -1) {
+#ifdef __wasm__
+        // WASM doesn't support x86 CPU detection
+        has_sse = 0;
+#else
         int cpuinfo[4];
 #ifdef _MSC_VER
         __cpuid(cpuinfo, 1);
@@ -34,6 +280,7 @@ static void detect_simd_features() {
         cpuinfo[3] = __builtin_cpu_supports("sse") ? (1 << 25) : 0;
 #endif
         has_sse = (cpuinfo[3] & (1 << 25)) != 0;
+#endif
     }
 }
 

@@ -59,7 +59,9 @@ yarn-debug.log*
 yarn-error.log*
 
 # Test outputs and artifacts
-test-output/
+tests/outputs/
+tests/inputs/
+.benchmarks/
 *.tmp
 *.temp
 

@@ -1,8 +1,114 @@
 #include "util.h"
-#include <stdlib.h>
-#include <string.h>
-#include <stdio.h>
-#include <stdarg.h>
+
+// WASM-compatible standard library replacements
+#ifdef __wasm32__
+// Minimal WASM implementations - these are simplified stubs
+extern void* malloc(size_t size);
+extern void* realloc(void* ptr, size_t size);
+extern void free(void* ptr);
+extern void* memcpy(void* dest, const void* src, size_t n);
+extern void* memset(void* s, int c, size_t n);
+extern int memcmp(const void* s1, const void* s2, size_t n);
+
+// WASM-specific simplified implementations
+static inline char* strncpy(char* dest, const char* src, size_t n) {
+    size_t i;
+    for (i = 0; i < n && src[i] != '\0'; i++) {
+        dest[i] = src[i];
+    }
+    for (; i < n; i++) {
+        dest[i] = '\0';
+    }
+    return dest;
+}
+
+// Stub implementations for file operations (not available in WASM)
+typedef void FILE;
+#define SEEK_END 2
+#define SEEK_SET 0
+static FILE* stderr_stub;
+#define stderr (&stderr_stub)
+static inline FILE* fopen(const char* filename, const char* mode) { return NULL; }
+static inline int fclose(FILE* stream) { return 0; }
+static inline int fseek(FILE* stream, long offset, int whence) { return -1; }
+static inline long ftell(FILE* stream) { return -1; }
+static inline size_t fread(void* ptr, size_t size, size_t nmemb, FILE* stream) { return 0; }
+static inline int fprintf(FILE* stream, const char* format, ...) { return 0; }
+static inline int vfprintf(FILE* stream, const char* format, void* ap) { return 0; }
+static inline int fflush(FILE* stream) { return 0; }
+static inline size_t fwrite(const void* ptr, size_t size, size_t nmemb, FILE* stream) { return 0; }
+
+// Varargs for WASM - simplified approach
+typedef void* va_list;
+#define va_start(ap, last) ((ap) = 0)
+#define va_end(ap) ((ap) = 0)
+
+#else
+// Standard headers for native builds only
+#ifndef __wasm__
+    #include <stdlib.h>
+    #include <string.h>
+    #include <stdio.h>
+    #include <stdarg.h>
+#else
+    // WASM freestanding implementations
+    typedef void* va_list;
+    #define va_start(ap, last) ((ap) = 0)
+    #define va_end(ap) ((ap) = 0)
+    
+    // Memory operations for WASM
+    static void* memcpy_wasm(void* dest, const void* src, size_t n) {
+        char* d = (char*)dest;
+        const char* s = (const char*)src;
+        for (size_t i = 0; i < n; i++) {
+            d[i] = s[i];
+        }
+        return dest;
+    }
+    
+    static void* memset_wasm(void* s, int c, size_t n) {
+        char* p = (char*)s;
+        for (size_t i = 0; i < n; i++) {
+            p[i] = (char)c;
+        }
+        return s;
+    }
+    
+    #define memcpy memcpy_wasm
+    #define memset memset_wasm
+    
+    // WASM memory management - use static buffers
+    #define MAX_WASM_BUFFERS 32
+    #define WASM_BUFFER_SIZE 65536
+    
+    static char wasm_buffer_pool[MAX_WASM_BUFFERS][WASM_BUFFER_SIZE];
+    static int wasm_buffer_used[MAX_WASM_BUFFERS] = {0};
+    
+    static void* wasm_malloc(size_t size) {
+        if (size > WASM_BUFFER_SIZE) return 0;
+        for (int i = 0; i < MAX_WASM_BUFFERS; i++) {
+            if (!wasm_buffer_used[i]) {
+                wasm_buffer_used[i] = 1;
+                return wasm_buffer_pool[i];
+            }
+        }
+        return 0; // No free buffers
+    }
+    
+    static void wasm_free(void* ptr) {
+        if (!ptr) return;
+        for (int i = 0; i < MAX_WASM_BUFFERS; i++) {
+            if (ptr == wasm_buffer_pool[i]) {
+                wasm_buffer_used[i] = 0;
+                break;
+            }
+        }
+    }
+    
+    #define malloc wasm_malloc
+    #define free wasm_free
+#endif
+#endif
 
 static LogLevel current_log_level = LOG_INFO;
 

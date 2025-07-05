@@ -261,9 +261,11 @@ fn optimize_video(
         optimization_level: if video_opts.web_optimize { 9 } else { 6 },
     };
     
-    // TODO: Handle trim option when implementing video processing
-    if video_opts.trim.is_some() {
-        log::warn!("Video trimming not yet implemented: {:?}", video_opts.trim);
+    // Handle trim option for video processing (placeholder implementation)
+    if let Some(trim_spec) = &video_opts.trim {
+        log::warn!("Video trimming requested: {:?} - this feature requires FFmpeg integration and is not yet implemented", trim_spec);
+        // In a full implementation, this would modify the optimization options
+        // to include trim start/end times for the video encoder
     }
     
     // Use new video module for optimization

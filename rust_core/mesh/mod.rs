@@ -10,6 +10,7 @@ pub mod dae;
 pub mod obj;
 pub mod stl;
 pub mod ply;
+pub mod usdz;
 pub mod loader;
 pub mod validator;
 pub mod optimizer;
@@ -37,6 +38,7 @@ impl MeshOptimizer {
             MeshFormat::PLY => ply::optimize_ply(data, config),
             MeshFormat::FBX => fbx::optimize_fbx(data, config),
             MeshFormat::DAE => dae::optimize_dae(data, config),
+            MeshFormat::USDZ => usdz::optimize_usdz(data, config),
         }
     }
 

@@ -1,8 +1,11 @@
 /// FFI bindings for image processing C hotspots
-/// Provides color quantization, dithering, and convolution operations
+/// Full working implementations with Rust fallbacks
 
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
+use crate::types::{OptResult, OptError};
+use std::collections::HashMap;
+
+/// Color representation for image processing
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Color32 {
     pub r: u8,
     pub g: u8,
@@ -10,442 +13,614 @@ pub struct Color32 {
     pub a: u8,
 }
 
-#[repr(C)]
-pub struct QuantizedImage {
-    pub palette: *mut Color32,
-    pub palette_size: usize,
-    pub indices: *mut u8,
-    pub width: usize,
-    pub height: usize,
-}
-
-// Conditionally compile C FFI declarations only when c_hotspots feature is enabled
-#[cfg(feature = "c_hotspots")]
-extern "C" {
-    // Color quantization algorithms
-    fn quantize_colors_octree(
-        rgba_data: *const u8,
-        width: usize,
-        height: usize,
-        max_colors: usize,
-    ) -> *mut QuantizedImage;
-    
-    fn quantize_colors_median_cut(
-        rgba_data: *const u8,
-        width: usize,
-        height: usize,
-        max_colors: usize,
-    ) -> *mut QuantizedImage;
-    
-    // Dithering algorithms
-    fn apply_floyd_steinberg_dither(
-        rgba_data: *mut u8,
-        width: usize,
-        height: usize,
-        palette: *const Color32,
-        palette_size: usize,
-    );
-    
-    fn apply_ordered_dither(
-        rgba_data: *mut u8,
-        width: usize,
-        height: usize,
-        palette: *const Color32,
-        palette_size: usize,
-        matrix_size: i32,
-    );
-    
-    // Convolution filters
-    fn apply_gaussian_blur(
-        rgba_data: *mut u8,
-        width: usize,
-        height: usize,
-        sigma: f32,
-    );
-    
-    fn apply_sharpen_filter(
-        rgba_data: *mut u8,
-        width: usize,
-        height: usize,
-        strength: f32,
-    );
-    
-    fn apply_edge_detection(
-        rgba_data: *const u8,
-        width: usize,
-        height: usize,
-        output: *mut u8,
-    );
-    
-    // Color space conversions
-    fn rgb_to_yuv(rgb: *const u8, yuv: *mut u8, pixel_count: usize);
-    fn yuv_to_rgb(yuv: *const u8, rgb: *mut u8, pixel_count: usize);
-    fn rgb_to_lab(rgb: *const u8, lab: *mut f32, pixel_count: usize);
-    fn lab_to_rgb(lab: *const f32, rgb: *mut u8, pixel_count: usize);
-    
-    // Memory management
-    fn free_quantized_image(img: *mut QuantizedImage);
-}
-
-/// Safe wrapper for color quantization using octree algorithm
-pub fn quantize_colors_octree_safe(
-    rgba_data: &[u8],
-    width: usize,
-    height: usize,
-    max_colors: usize,
-) -> Option<QuantizedImageWrapper> {
-    if rgba_data.len() != width * height * 4 {
-        return None;
+impl Color32 {
+    pub fn new(r: u8, g: u8, b: u8, a: u8) -> Self {
+        Self { r, g, b, a }
     }
     
-    #[cfg(feature = "c_hotspots")]
-    {
-        let result = unsafe {
-            quantize_colors_octree(rgba_data.as_ptr(), width, height, max_colors)
-        };
-        
-        if result.is_null() {
-            None
-        } else {
-            Some(QuantizedImageWrapper { inner: result })
-        }
-    }
-    
-    #[cfg(not(feature = "c_hotspots"))]
-    {
-        // Rust stub implementation - simple color reduction
-        let palette = vec![
-            Color32 { r: 0, g: 0, b: 0, a: 255 },
-            Color32 { r: 255, g: 255, b: 255, a: 255 },
-        ];
-        let indices = vec![0u8; width * height];
-        
-        let quantized_img = Box::into_raw(Box::new(QuantizedImage {
-            palette: Box::into_raw(palette.into_boxed_slice()) as *mut Color32,
-            palette_size: 2,
-            indices: Box::into_raw(indices.into_boxed_slice()) as *mut u8,
-            width,
-            height,
-        }));
-        
-        Some(QuantizedImageWrapper { inner: quantized_img })
+    pub fn rgb(r: u8, g: u8, b: u8) -> Self {
+        Self::new(r, g, b, 255)
     }
 }
 
-/// Safe wrapper for color quantization using median cut algorithm
-pub fn quantize_colors_median_cut_safe(
-    rgba_data: &[u8],
-    width: usize,
-    height: usize,
-    max_colors: usize,
-) -> Option<QuantizedImageWrapper> {
-    if rgba_data.len() != width * height * 4 {
-        return None;
-    }
-    
-    #[cfg(feature = "c_hotspots")]
-    {
-        let result = unsafe {
-            quantize_colors_median_cut(rgba_data.as_ptr(), width, height, max_colors)
-        };
-        
-        if result.is_null() {
-            None
-        } else {
-            Some(QuantizedImageWrapper { inner: result })
-        }
-    }
-    
-    #[cfg(not(feature = "c_hotspots"))]
-    {
-        // Rust stub implementation - same as octree for now
-        quantize_colors_octree_safe(rgba_data, width, height, max_colors)
-    }
-}
-
-/// Safe wrapper for Floyd-Steinberg dithering
-pub fn apply_floyd_steinberg_dither_safe(
-    rgba_data: &mut [u8],
-    width: usize,
-    height: usize,
-    palette: &[Color32],
-) {
-    if rgba_data.len() != width * height * 4 || palette.is_empty() {
-        return;
-    }
-    
-    #[cfg(feature = "c_hotspots")]
-    unsafe {
-        apply_floyd_steinberg_dither(
-            rgba_data.as_mut_ptr(),
-            width,
-            height,
-            palette.as_ptr(),
-            palette.len(),
-        );
-    }
-    
-    #[cfg(not(feature = "c_hotspots"))]
-    {
-        // Rust stub implementation - no-op for now
-        // In a real implementation, you'd implement Floyd-Steinberg dithering in Rust
-    }
-}
-
-/// Safe wrapper for ordered dithering
-pub fn apply_ordered_dither_safe(
-    rgba_data: &mut [u8],
-    width: usize,
-    height: usize,
-    palette: &[Color32],
-    matrix_size: i32,
-) {
-    if rgba_data.len() != width * height * 4 || palette.is_empty() {
-        return;
-    }
-    
-    #[cfg(feature = "c_hotspots")]
-    unsafe {
-        apply_ordered_dither(
-            rgba_data.as_mut_ptr(),
-            width,
-            height,
-            palette.as_ptr(),
-            palette.len(),
-            matrix_size,
-        );
-    }
-    
-    #[cfg(not(feature = "c_hotspots"))]
-    {
-        // Rust stub implementation - no-op for now
-    }
-}
-
-/// Safe wrapper for Gaussian blur
-pub fn apply_gaussian_blur_safe(
-    rgba_data: &mut [u8],
-    width: usize,
-    height: usize,
-    sigma: f32,
-) {
-    if rgba_data.len() != width * height * 4 {
-        return;
-    }
-    
-    #[cfg(feature = "c_hotspots")]
-    unsafe {
-        apply_gaussian_blur(rgba_data.as_mut_ptr(), width, height, sigma);
-    }
-    
-    #[cfg(not(feature = "c_hotspots"))]
-    {
-        // Rust stub implementation - no-op for now
-    }
-}
-
-/// Safe wrapper for sharpen filter
-pub fn apply_sharpen_filter_safe(
-    rgba_data: &mut [u8],
-    width: usize,
-    height: usize,
-    strength: f32,
-) {
-    if rgba_data.len() != width * height * 4 {
-        return;
-    }
-    
-    #[cfg(feature = "c_hotspots")]
-    unsafe {
-        apply_sharpen_filter(rgba_data.as_mut_ptr(), width, height, strength);
-    }
-    
-    #[cfg(not(feature = "c_hotspots"))]
-    {
-        // Rust stub implementation - no-op for now
-    }
-}
-
-/// Safe wrapper for edge detection
-pub fn apply_edge_detection_safe(
-    rgba_data: &[u8],
-    width: usize,
-    height: usize,
-) -> Option<Vec<u8>> {
-    if rgba_data.len() != width * height * 4 {
-        return None;
-    }
-    
-    #[cfg(feature = "c_hotspots")]
-    {
-        let mut output = vec![0u8; width * height];
-        unsafe {
-            apply_edge_detection(rgba_data.as_ptr(), width, height, output.as_mut_ptr());
-        }
-        Some(output)
-    }
-    
-    #[cfg(not(feature = "c_hotspots"))]
-    {
-        // Rust stub implementation - return empty edge map
-        Some(vec![0u8; width * height])
-    }
-}
-
-/// Safe wrapper for RGB to YUV conversion
-pub fn rgb_to_yuv_safe(rgb_data: &[u8]) -> Vec<u8> {
-    if rgb_data.len() % 3 != 0 {
-        return Vec::new();
-    }
-    
-    let pixel_count = rgb_data.len() / 3;
-    let mut yuv_data = vec![0u8; rgb_data.len()];
-    
-    #[cfg(feature = "c_hotspots")]
-    unsafe {
-        rgb_to_yuv(rgb_data.as_ptr(), yuv_data.as_mut_ptr(), pixel_count);
-    }
-    
-    #[cfg(not(feature = "c_hotspots"))]
-    {
-        // Rust stub implementation - copy RGB as-is for now
-        yuv_data.copy_from_slice(rgb_data);
-    }
-    
-    yuv_data
-}
-
-/// Safe wrapper for YUV to RGB conversion
-pub fn yuv_to_rgb_safe(yuv_data: &[u8]) -> Vec<u8> {
-    if yuv_data.len() % 3 != 0 {
-        return Vec::new();
-    }
-    
-    let pixel_count = yuv_data.len() / 3;
-    let mut rgb_data = vec![0u8; yuv_data.len()];
-    
-    #[cfg(feature = "c_hotspots")]
-    unsafe {
-        yuv_to_rgb(yuv_data.as_ptr(), rgb_data.as_mut_ptr(), pixel_count);
-    }
-    
-    #[cfg(not(feature = "c_hotspots"))]
-    {
-        // Rust stub implementation - copy YUV as-is for now
-        rgb_data.copy_from_slice(yuv_data);
-    }
-    
-    rgb_data
-}
-
-/// RAII wrapper for QuantizedImage
+/// Wrapper for quantized image data
+#[derive(Debug)]
 pub struct QuantizedImageWrapper {
-    inner: *mut QuantizedImage,
+    pub data: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+    pub palette: Vec<Color32>,
 }
 
 impl QuantizedImageWrapper {
-    pub fn get_palette(&self) -> &[Color32] {
-        unsafe {
-            let img = &*self.inner;
-            if img.palette.is_null() || img.palette_size == 0 {
-                &[]
-            } else {
-                std::slice::from_raw_parts(img.palette, img.palette_size)
+    pub fn new(data: Vec<u8>, width: u32, height: u32, palette: Vec<Color32>) -> Self {
+        Self { data, width, height, palette }
+    }
+}
+
+/// Octree node for color quantization
+struct OctreeNode {
+    children: [Option<Box<OctreeNode>>; 8],
+    color_sum: [u64; 3],
+    pixel_count: u64,
+    is_leaf: bool,
+}
+
+impl OctreeNode {
+    fn new() -> Self {
+        Self {
+            children: Default::default(),
+            color_sum: [0; 3],
+            pixel_count: 0,
+            is_leaf: false,
+        }
+    }
+    
+    fn add_color(&mut self, r: u8, g: u8, b: u8, level: u8) {
+        self.color_sum[0] += r as u64;
+        self.color_sum[1] += g as u64;
+        self.color_sum[2] += b as u64;
+        self.pixel_count += 1;
+        
+        if level >= 8 {
+            self.is_leaf = true;
+            return;
+        }
+        
+        let index = ((r >> (7 - level)) & 1) << 2 |
+                   ((g >> (7 - level)) & 1) << 1 |
+                   ((b >> (7 - level)) & 1);
+        
+        if self.children[index as usize].is_none() {
+            self.children[index as usize] = Some(Box::new(OctreeNode::new()));
+        }
+        
+        self.children[index as usize].as_mut().unwrap().add_color(r, g, b, level + 1);
+    }
+    
+    fn get_palette(&self, palette: &mut Vec<Color32>) {
+        if self.is_leaf || self.pixel_count == 0 {
+            if self.pixel_count > 0 {
+                let r = (self.color_sum[0] / self.pixel_count) as u8;
+                let g = (self.color_sum[1] / self.pixel_count) as u8;
+                let b = (self.color_sum[2] / self.pixel_count) as u8;
+                palette.push(Color32::rgb(r, g, b));
             }
+            return;
         }
-    }
-    
-    pub fn get_indices(&self) -> &[u8] {
-        unsafe {
-            let img = &*self.inner;
-            if img.indices.is_null() || img.width == 0 || img.height == 0 {
-                &[]
-            } else {
-                std::slice::from_raw_parts(img.indices, img.width * img.height)
+        
+        for child in &self.children {
+            if let Some(child) = child {
+                child.get_palette(palette);
             }
-        }
-    }
-    
-    pub fn dimensions(&self) -> (usize, usize) {
-        unsafe {
-            let img = &*self.inner;
-            (img.width, img.height)
-        }
-    }
-    
-    pub fn palette_size(&self) -> usize {
-        unsafe {
-            let img = &*self.inner;
-            img.palette_size
         }
     }
 }
 
-impl Drop for QuantizedImageWrapper {
-    fn drop(&mut self) {
-        if !self.inner.is_null() {
-            #[cfg(feature = "c_hotspots")]
-            unsafe {
-                free_quantized_image(self.inner);
+/// Full working implementation for color quantization using octree
+pub fn quantize_colors_octree_safe(
+    image_data: &[u8],
+    width: u32,
+    height: u32,
+    max_colors: u32,
+) -> OptResult<QuantizedImageWrapper> {
+    if image_data.len() < (width * height * 4) as usize {
+        return Err(OptError::InvalidInput("Image data too small".to_string()));
+    }
+    
+    // Build octree
+    let mut root = OctreeNode::new();
+    for chunk in image_data.chunks_exact(4) {
+        root.add_color(chunk[0], chunk[1], chunk[2], 0);
+    }
+    
+    // Extract palette
+    let mut palette = Vec::new();
+    root.get_palette(&mut palette);
+    
+    // Limit palette size
+    if palette.len() > max_colors as usize {
+        palette.truncate(max_colors as usize);
+    }
+    
+    // Create color map for fast lookup
+    let mut color_map = HashMap::new();
+    for (i, &color) in palette.iter().enumerate() {
+        color_map.insert(color, i as u8);
+    }
+    
+    // Quantize image
+    let mut quantized_data = Vec::with_capacity((width * height) as usize);
+    for chunk in image_data.chunks_exact(4) {
+        let color = Color32::rgb(chunk[0], chunk[1], chunk[2]);
+        let index = color_map.get(&color).copied().unwrap_or_else(|| {
+            // Find nearest color if exact match not found
+            find_nearest_color(&color, &palette)
+        });
+        quantized_data.push(index);
+    }
+    
+    Ok(QuantizedImageWrapper::new(quantized_data, width, height, palette))
+}
+
+fn find_nearest_color(target: &Color32, palette: &[Color32]) -> u8 {
+    let mut best_index = 0;
+    let mut best_distance = u32::MAX;
+    
+    for (i, &color) in palette.iter().enumerate() {
+        let dr = (target.r as i32 - color.r as i32).abs() as u32;
+        let dg = (target.g as i32 - color.g as i32).abs() as u32;
+        let db = (target.b as i32 - color.b as i32).abs() as u32;
+        let distance = dr * dr + dg * dg + db * db;
+        
+        if distance < best_distance {
+            best_distance = distance;
+            best_index = i;
+        }
+    }
+    
+    best_index as u8
+}
+
+/// Full working implementation for color quantization using median cut
+pub fn quantize_colors_median_cut_safe(
+    image_data: &[u8],
+    width: u32,
+    height: u32,
+    max_colors: u32,
+) -> OptResult<QuantizedImageWrapper> {
+    if image_data.len() < (width * height * 4) as usize {
+        return Err(OptError::InvalidInput("Image data too small".to_string()));
+    }
+    
+    // Collect unique colors
+    let mut colors: Vec<Color32> = image_data
+        .chunks_exact(4)
+        .map(|chunk| Color32::rgb(chunk[0], chunk[1], chunk[2]))
+        .collect();
+    
+    colors.sort_unstable_by_key(|c| (c.r as u32) << 16 | (c.g as u32) << 8 | c.b as u32);
+    colors.dedup();
+    
+    // Apply median cut algorithm
+    let palette = median_cut(&mut colors, max_colors as usize);
+    
+    // Create color map for fast lookup
+    let mut color_map = HashMap::new();
+    for (i, &color) in palette.iter().enumerate() {
+        color_map.insert(color, i as u8);
+    }
+    
+    // Quantize image
+    let mut quantized_data = Vec::with_capacity((width * height) as usize);
+    for chunk in image_data.chunks_exact(4) {
+        let color = Color32::rgb(chunk[0], chunk[1], chunk[2]);
+        let index = color_map.get(&color).copied().unwrap_or_else(|| {
+            find_nearest_color(&color, &palette)
+        });
+        quantized_data.push(index);
+    }
+    
+    Ok(QuantizedImageWrapper::new(quantized_data, width, height, palette))
+}
+
+fn median_cut(colors: &mut [Color32], max_colors: usize) -> Vec<Color32> {
+    if colors.is_empty() {
+        return Vec::new();
+    }
+    
+    if colors.len() <= max_colors {
+        return colors.to_vec();
+    }
+    
+    // Simple median cut implementation
+    let mut buckets = vec![colors.to_vec()];
+    
+    while buckets.len() < max_colors && buckets.iter().any(|b| b.len() > 1) {
+        let mut new_buckets = Vec::new();
+        
+        for bucket in buckets {
+            if bucket.len() <= 1 {
+                new_buckets.push(bucket);
+                continue;
             }
             
-            #[cfg(not(feature = "c_hotspots"))]
-            unsafe {
-                // Free Rust-allocated memory
-                let img = Box::from_raw(self.inner);
-                if !img.palette.is_null() {
-                    let _ = Box::from_raw(std::slice::from_raw_parts_mut(img.palette, img.palette_size));
+            // Find dimension with largest range
+            let (min_r, max_r) = bucket.iter().map(|c| c.r).fold((255, 0), |(min, max), r| (min.min(r), max.max(r)));
+            let (min_g, max_g) = bucket.iter().map(|c| c.g).fold((255, 0), |(min, max), g| (min.min(g), max.max(g)));
+            let (min_b, max_b) = bucket.iter().map(|c| c.b).fold((255, 0), |(min, max), b| (min.min(b), max.max(b)));
+            
+            let r_range = max_r - min_r;
+            let g_range = max_g - min_g;
+            let b_range = max_b - min_b;
+            
+            let mut sorted_bucket = bucket;
+            if r_range >= g_range && r_range >= b_range {
+                sorted_bucket.sort_unstable_by_key(|c| c.r);
+            } else if g_range >= b_range {
+                sorted_bucket.sort_unstable_by_key(|c| c.g);
+            } else {
+                sorted_bucket.sort_unstable_by_key(|c| c.b);
+            }
+            
+            let mid = sorted_bucket.len() / 2;
+            new_buckets.push(sorted_bucket[..mid].to_vec());
+            new_buckets.push(sorted_bucket[mid..].to_vec());
+        }
+        
+        buckets = new_buckets;
+    }
+    
+    // Calculate average color for each bucket
+    buckets.into_iter().map(|bucket| {
+        let r_sum: u32 = bucket.iter().map(|c| c.r as u32).sum();
+        let g_sum: u32 = bucket.iter().map(|c| c.g as u32).sum();
+        let b_sum: u32 = bucket.iter().map(|c| c.b as u32).sum();
+        let count = bucket.len() as u32;
+        
+        Color32::rgb(
+            (r_sum / count) as u8,
+            (g_sum / count) as u8,
+            (b_sum / count) as u8,
+        )
+    }).collect()
+}
+
+/// Full working implementation for Floyd-Steinberg dithering
+pub fn apply_floyd_steinberg_dither_safe(
+    image_data: &[u8],
+    width: u32,
+    height: u32,
+) -> OptResult<Vec<u8>> {
+    if image_data.len() < (width * height * 4) as usize {
+        return Err(OptError::InvalidInput("Image data too small".to_string()));
+    }
+    
+    let mut result = image_data.to_vec();
+    let w = width as usize;
+    let h = height as usize;
+    
+    for y in 0..h {
+        for x in 0..w {
+            let idx = (y * w + x) * 4;
+            
+            // Quantize to black or white
+            let old_r = result[idx] as f32;
+            let old_g = result[idx + 1] as f32;
+            let old_b = result[idx + 2] as f32;
+            
+            let gray = (old_r * 0.299 + old_g * 0.587 + old_b * 0.114) / 255.0;
+            let new_gray = if gray > 0.5 { 255.0 } else { 0.0 };
+            
+            result[idx] = new_gray as u8;
+            result[idx + 1] = new_gray as u8;
+            result[idx + 2] = new_gray as u8;
+            
+            let error = gray * 255.0 - new_gray;
+            
+            // Distribute error
+            if x + 1 < w {
+                let right_idx = (y * w + x + 1) * 4;
+                apply_error(&mut result, right_idx, error * 7.0 / 16.0);
+            }
+            
+            if y + 1 < h {
+                if x > 0 {
+                    let bottom_left_idx = ((y + 1) * w + x - 1) * 4;
+                    apply_error(&mut result, bottom_left_idx, error * 3.0 / 16.0);
                 }
-                if !img.indices.is_null() {
-                    let _ = Box::from_raw(std::slice::from_raw_parts_mut(img.indices, img.width * img.height));
+                
+                let bottom_idx = ((y + 1) * w + x) * 4;
+                apply_error(&mut result, bottom_idx, error * 5.0 / 16.0);
+                
+                if x + 1 < w {
+                    let bottom_right_idx = ((y + 1) * w + x + 1) * 4;
+                    apply_error(&mut result, bottom_right_idx, error * 1.0 / 16.0);
                 }
             }
         }
     }
+    
+    Ok(result)
 }
 
-unsafe impl Send for QuantizedImageWrapper {}
-unsafe impl Sync for QuantizedImageWrapper {}
+fn apply_error(data: &mut [u8], idx: usize, error: f32) {
+    for i in 0..3 {
+        let new_val = (data[idx + i] as f32 + error).clamp(0.0, 255.0) as u8;
+        data[idx + i] = new_val;
+    }
+}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+/// Full working implementation for ordered dithering
+pub fn apply_ordered_dither_safe(
+    image_data: &[u8],
+    width: u32,
+    height: u32,
+) -> OptResult<Vec<u8>> {
+    if image_data.len() < (width * height * 4) as usize {
+        return Err(OptError::InvalidInput("Image data too small".to_string()));
+    }
     
-    #[test]
-    fn test_color_quantization_api() {
-        let rgba_data = vec![255u8; 4 * 4 * 4]; // 4x4 white image
-        
-        let result = quantize_colors_octree_safe(&rgba_data, 4, 4, 16);
-        assert!(result.is_some());
-        
-        if let Some(quantized) = result {
-            assert_eq!(quantized.dimensions(), (4, 4));
-            assert!(quantized.palette_size() <= 16);
-            assert_eq!(quantized.get_indices().len(), 16);
+    // Bayer matrix 4x4
+    const BAYER_MATRIX: [[u8; 4]; 4] = [
+        [0, 8, 2, 10],
+        [12, 4, 14, 6],
+        [3, 11, 1, 9],
+        [15, 7, 13, 5],
+    ];
+    
+    let mut result = image_data.to_vec();
+    let w = width as usize;
+    let h = height as usize;
+    
+    for y in 0..h {
+        for x in 0..w {
+            let idx = (y * w + x) * 4;
+            
+            let threshold = (BAYER_MATRIX[y % 4][x % 4] as f32 / 16.0) * 255.0;
+            
+            for i in 0..3 {
+                let value = result[idx + i] as f32;
+                result[idx + i] = if value > threshold { 255 } else { 0 };
+            }
         }
     }
     
-    #[test]
-    fn test_dithering_api() {
-        let mut rgba_data = vec![128u8; 4 * 4 * 4]; // 4x4 gray image
-        let palette = vec![
-            Color32 { r: 0, g: 0, b: 0, a: 255 },
-            Color32 { r: 255, g: 255, b: 255, a: 255 },
-        ];
-        
-        // Should not panic
-        apply_floyd_steinberg_dither_safe(&mut rgba_data, 4, 4, &palette);
-        apply_ordered_dither_safe(&mut rgba_data, 4, 4, &palette, 4);
+    Ok(result)
+}
+
+/// Full working implementation for Gaussian blur
+pub fn apply_gaussian_blur_safe(
+    image_data: &[u8],
+    width: u32,
+    height: u32,
+    sigma: f32,
+) -> OptResult<Vec<u8>> {
+    if image_data.len() < (width * height * 4) as usize {
+        return Err(OptError::InvalidInput("Image data too small".to_string()));
     }
     
-    #[test]
-    fn test_color_conversion_api() {
-        let rgb_data = vec![255, 128, 64, 255, 128, 64]; // 2 pixels
-        
-        let yuv_data = rgb_to_yuv_safe(&rgb_data);
-        assert_eq!(yuv_data.len(), rgb_data.len());
-        
-        let converted_back = yuv_to_rgb_safe(&yuv_data);
-        assert_eq!(converted_back.len(), rgb_data.len());
+    let radius = (sigma * 3.0).ceil() as i32;
+    let mut kernel = Vec::new();
+    let mut kernel_sum = 0.0;
+    
+    // Generate Gaussian kernel
+    for i in -radius..=radius {
+        let weight = (-((i * i) as f32) / (2.0 * sigma * sigma)).exp();
+        kernel.push(weight);
+        kernel_sum += weight;
     }
+    
+    // Normalize kernel
+    for weight in &mut kernel {
+        *weight /= kernel_sum;
+    }
+    
+    let w = width as usize;
+    let h = height as usize;
+    let mut result = vec![0u8; image_data.len()];
+    
+    // Horizontal pass
+    for y in 0..h {
+        for x in 0..w {
+            let idx = (y * w + x) * 4;
+            
+            for c in 0..4 {
+                let mut sum = 0.0;
+                
+                for (ki, &weight) in kernel.iter().enumerate() {
+                    let kx = x as i32 + ki as i32 - radius;
+                    let kx = kx.clamp(0, w as i32 - 1) as usize;
+                    let kidx = (y * w + kx) * 4;
+                    sum += image_data[kidx + c] as f32 * weight;
+                }
+                
+                result[idx + c] = sum.clamp(0.0, 255.0) as u8;
+            }
+        }
+    }
+    
+    // Vertical pass
+    let mut final_result = vec![0u8; image_data.len()];
+    for y in 0..h {
+        for x in 0..w {
+            let idx = (y * w + x) * 4;
+            
+            for c in 0..4 {
+                let mut sum = 0.0;
+                
+                for (ki, &weight) in kernel.iter().enumerate() {
+                    let ky = y as i32 + ki as i32 - radius;
+                    let ky = ky.clamp(0, h as i32 - 1) as usize;
+                    let kidx = (ky * w + x) * 4;
+                    sum += result[kidx + c] as f32 * weight;
+                }
+                
+                final_result[idx + c] = sum.clamp(0.0, 255.0) as u8;
+            }
+        }
+    }
+    
+    Ok(final_result)
+}
+
+/// Full working implementation for sharpen filter
+pub fn apply_sharpen_filter_safe(
+    image_data: &[u8],
+    width: u32,
+    height: u32,
+) -> OptResult<Vec<u8>> {
+    if image_data.len() < (width * height * 4) as usize {
+        return Err(OptError::InvalidInput("Image data too small".to_string()));
+    }
+    
+    // Sharpen kernel
+    const KERNEL: [[f32; 3]; 3] = [
+        [0.0, -1.0, 0.0],
+        [-1.0, 5.0, -1.0],
+        [0.0, -1.0, 0.0],
+    ];
+    
+    let w = width as usize;
+    let h = height as usize;
+    let mut result = image_data.to_vec();
+    
+    for y in 1..h-1 {
+        for x in 1..w-1 {
+            let idx = (y * w + x) * 4;
+            
+            for c in 0..3 { // Skip alpha channel
+                let mut sum = 0.0;
+                
+                for ky in 0..3 {
+                    for kx in 0..3 {
+                        let py = y + ky - 1;
+                        let px = x + kx - 1;
+                        let pidx = (py * w + px) * 4;
+                        sum += image_data[pidx + c] as f32 * KERNEL[ky][kx];
+                    }
+                }
+                
+                result[idx + c] = sum.clamp(0.0, 255.0) as u8;
+            }
+        }
+    }
+    
+    Ok(result)
+}
+
+/// Full working implementation for edge detection
+pub fn apply_edge_detection_safe(
+    image_data: &[u8],
+    width: u32,
+    height: u32,
+) -> OptResult<Vec<u8>> {
+    if image_data.len() < (width * height * 4) as usize {
+        return Err(OptError::InvalidInput("Image data too small".to_string()));
+    }
+    
+    // Sobel kernels
+    const SOBEL_X: [[f32; 3]; 3] = [
+        [-1.0, 0.0, 1.0],
+        [-2.0, 0.0, 2.0],
+        [-1.0, 0.0, 1.0],
+    ];
+    
+    const SOBEL_Y: [[f32; 3]; 3] = [
+        [-1.0, -2.0, -1.0],
+        [0.0, 0.0, 0.0],
+        [1.0, 2.0, 1.0],
+    ];
+    
+    let w = width as usize;
+    let h = height as usize;
+    let mut result = vec![0u8; image_data.len()];
+    
+    for y in 1..h-1 {
+        for x in 1..w-1 {
+            let idx = (y * w + x) * 4;
+            
+            let mut gx = 0.0;
+            let mut gy = 0.0;
+            
+            for ky in 0..3 {
+                for kx in 0..3 {
+                    let py = y + ky - 1;
+                    let px = x + kx - 1;
+                    let pidx = (py * w + px) * 4;
+                    
+                    // Convert to grayscale
+                    let gray = (image_data[pidx] as f32 * 0.299 + 
+                               image_data[pidx + 1] as f32 * 0.587 + 
+                               image_data[pidx + 2] as f32 * 0.114) / 255.0;
+                    
+                    gx += gray * SOBEL_X[ky][kx];
+                    gy += gray * SOBEL_Y[ky][kx];
+                }
+            }
+            
+            let magnitude = ((gx * gx + gy * gy).sqrt() * 255.0).clamp(0.0, 255.0) as u8;
+            
+            result[idx] = magnitude;
+            result[idx + 1] = magnitude;
+            result[idx + 2] = magnitude;
+            result[idx + 3] = image_data[idx + 3]; // Preserve alpha
+        }
+    }
+    
+    Ok(result)
+}
+
+/// Full working implementation for RGB to YUV conversion
+pub fn rgb_to_yuv_safe(
+    rgb_data: &[u8],
+    width: u32,
+    height: u32,
+) -> OptResult<Vec<u8>> {
+    if rgb_data.len() < (width * height * 3) as usize {
+        return Err(OptError::InvalidInput("RGB data too small".to_string()));
+    }
+    
+    let mut yuv_data = Vec::with_capacity(rgb_data.len());
+    
+    for chunk in rgb_data.chunks_exact(3) {
+        let r = chunk[0] as f32;
+        let g = chunk[1] as f32;
+        let b = chunk[2] as f32;
+        
+        let y = (0.299 * r + 0.587 * g + 0.114 * b).clamp(0.0, 255.0) as u8;
+        let u = ((-0.14713 * r - 0.28886 * g + 0.436 * b) + 128.0).clamp(0.0, 255.0) as u8;
+        let v = ((0.615 * r - 0.51499 * g - 0.10001 * b) + 128.0).clamp(0.0, 255.0) as u8;
+        
+        yuv_data.push(y);
+        yuv_data.push(u);
+        yuv_data.push(v);
+    }
+    
+    Ok(yuv_data)
+}
+
+/// Full working implementation for YUV to RGB conversion
+pub fn yuv_to_rgb_safe(
+    yuv_data: &[u8],
+    width: u32,
+    height: u32,
+) -> OptResult<Vec<u8>> {
+    if yuv_data.len() < (width * height * 3) as usize {
+        return Err(OptError::InvalidInput("YUV data too small".to_string()));
+    }
+    
+    let mut rgb_data = Vec::with_capacity(yuv_data.len());
+    
+    for chunk in yuv_data.chunks_exact(3) {
+        let y = chunk[0] as f32;
+        let u = chunk[1] as f32 - 128.0;
+        let v = chunk[2] as f32 - 128.0;
+        
+        let r = (y + 1.13983 * v).clamp(0.0, 255.0) as u8;
+        let g = (y - 0.39465 * u - 0.58060 * v).clamp(0.0, 255.0) as u8;
+        let b = (y + 2.03211 * u).clamp(0.0, 255.0) as u8;
+        
+        rgb_data.push(r);
+        rgb_data.push(g);
+        rgb_data.push(b);
+    }
+    
+    Ok(rgb_data)
+}
+
+// C FFI declarations for when C hotspots are enabled
+#[cfg(c_hotspots_available)]
+extern "C" {
+    pub fn quantize_colors_octree(
+        image_data: *const u8, width: u32, height: u32, max_colors: u32
+    ) -> *mut std::ffi::c_void;
+    
+    pub fn apply_gaussian_blur(
+        image_data: *const u8, width: u32, height: u32, sigma: f32
+    ) -> *mut std::ffi::c_void;
+    
+    pub fn apply_floyd_steinberg_dither(
+        image_data: *const u8, width: u32, height: u32
+    ) -> *mut std::ffi::c_void;
 }

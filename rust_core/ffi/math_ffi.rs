@@ -35,6 +35,7 @@ pub struct Quat {
 
 // Conditionally compile C FFI declarations only when c_hotspots feature is enabled
 #[cfg(feature = "c_hotspots")]
+#[allow(dead_code)]
 extern "C" {
     // SIMD-optimized vector operations
     fn vec3_add_simd(a: *const Vec3, b: *const Vec3, result: *mut Vec3, count: usize);
@@ -55,8 +56,8 @@ extern "C" {
     // Transform operations
     fn transform_points(matrix: *const Mat4, points: *const Vec3, result: *mut Vec3, count: usize);
     fn transform_vectors(matrix: *const Mat4, vectors: *const Vec3, result: *mut Vec3, count: usize);
-    fn transform_points_batch(matrices: *const Mat4, points: *const Vec3, results: *mut Vec3, matrix_count: usize, point_count: usize);
-    fn transform_vectors_batch(matrices: *const Mat4, vectors: *const Vec3, results: *mut Vec3, matrix_count: usize, vector_count: usize);
+    fn transform_points_batch_c(matrices: *const Mat4, points: *const Vec3, results: *mut Vec3, matrix_count: usize, point_count: usize);
+    fn transform_vectors_batch_c(matrices: *const Mat4, vectors: *const Vec3, results: *mut Vec3, matrix_count: usize, vector_count: usize);
     
     // Quaternion operations
     fn quat_multiply(a: *const Quat, b: *const Quat, result: *mut Quat);
@@ -233,7 +234,7 @@ pub fn transform_points_batch(matrices: &[Mat4], points: &[Vec3], results: &mut 
     
     #[cfg(feature = "c_hotspots")]
     unsafe {
-        transform_points_batch(
+        transform_points_batch_c(
             matrices.as_ptr(),
             points.as_ptr(),
             results.as_mut_ptr(),
@@ -271,7 +272,7 @@ pub fn transform_vectors_batch(matrices: &[Mat4], vectors: &[Vec3], results: &mu
     
     #[cfg(feature = "c_hotspots")]
     unsafe {
-        transform_vectors_batch(
+        transform_vectors_batch_c(
             matrices.as_ptr(),
             vectors.as_ptr(),
             results.as_mut_ptr(),

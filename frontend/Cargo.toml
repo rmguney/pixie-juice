@@ -9,7 +9,7 @@ path = "src/main.rs"
 
 [dependencies]
 # Workspace dependencies
-rust_core = { path = "../rust_core" }
+rust_core = { path = "../rust_core", features = ["full", "c_hotspots"] }
 clap = { workspace = true }
 indicatif = { workspace = true }
 anyhow = { workspace = true }

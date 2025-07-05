@@ -14,6 +14,10 @@ const geistMono = Geist_Mono({
 export const metadata = {
   title: "Pixie Juice",
   description: "High performance media optimization",
+  icons: {
+    icon: "favicon.ico",
+    apple: "favicon.ico",
+  },
 };
 
 export default function RootLayout({ children }) {

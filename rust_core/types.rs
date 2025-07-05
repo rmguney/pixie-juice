@@ -18,6 +18,9 @@ pub enum OptError {
     #[error("Processing error: {0}")]
     ProcessingError(String),
     
+    #[error("Memory error: {0}")]
+    Memory(String),
+    
     #[error("Format error: {0}")]
     FormatError(String),
     

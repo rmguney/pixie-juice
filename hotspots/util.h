@@ -4,6 +4,19 @@
 #include <stdint.h>
 #include <stddef.h>
 
+// WASM-specific definitions
+#ifdef __wasm32__
+#define WASM_EXPORT __attribute__((visibility("default")))
+#define WASM_IMPORT __attribute__((import_module("env")))
+// Simplified implementations for WASM
+#ifndef NO_COMPLEX_MATH
+#define NO_COMPLEX_MATH
+#endif
+#else
+#define WASM_EXPORT
+#define WASM_IMPORT
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
