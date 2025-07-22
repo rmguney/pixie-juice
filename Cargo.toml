@@ -1,0 +1,78 @@
+[workspace]
+members = [
+    "core",
+    "web"
+]
+resolver = "2"
+
+[workspace.dependencies]
+# Image processing - Rust-first approach
+image = "0.24"
+oxipng = "9.0"
+webp = "0.2"
+jpeg-encoder = "0.6"
+mozjpeg-sys = "2.0"
+gif = "0.12"
+color_quant = "1.1"
+imageproc = "0.23"
+
+# 3D model formats
+gltf = "1.1"
+obj = "0.10"
+ply-rs = "0.1"
+stl_io = "0.7"
+meshopt = "0.2"
+quick-xml = "0.30"
+serde-xml-rs = "0.6"
+zip = "0.6"
+
+# Video processing
+ffmpeg-next = "6.0"
+mp4parse = "0.12"
+
+# Compression
+flate2 = "1.0"
+lz4_flex = "0.11"
+zstd = "0.13"
+
+# Error handling and utilities
+anyhow = "1.0"
+thiserror = "1.0"
+log = "0.4"
+serde = "1.0"
+serde_json = "1.0"
+toml = "0.8"
+
+# Platform-specific dependencies
+colored = "2.0"
+dirs = "5.0"
+
+# WASM/Web dependencies  
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+web-sys = "0.3"
+js-sys = "0.3"
+console_error_panic_hook = "0.1"
+serde-wasm-bindgen = "0.4"
+wasm-logger = "0.2"
+wee_alloc = "0.4"
+
+# Build dependencies
+cc = "1.0"
+bindgen = "0.69"
+
+# Performance optimizations for all builds
+[profile.release]
+opt-level = 3           # Maximum optimization
+lto = true             # Enable link time optimization
+codegen-units = 1      # Better optimization with single codegen unit
+panic = "abort"        # Smaller binaries
+debug = false          # No debug info in release
+
+[profile.release.package."*"]
+opt-level = 3
+
+# Development profile with some optimization for better dev experience
+[profile.dev]
+opt-level = 1
+debug = true
