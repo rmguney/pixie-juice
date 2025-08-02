@@ -1,0 +1,48 @@
+"""
+Simple test utilities for Pixie Juice WASM testing.
+"""
+
+def create_test_png() -> bytes:
+    """Create minimal valid PNG data for testing."""
+    # 1x1 transparent PNG
+    return bytes([
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,  # PNG signature
+        0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,  # IHDR chunk  
+        0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,  # 1x1 pixel
+        0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,  # RGBA
+        0x89, 0x00, 0x00, 0x00, 0x0B, 0x49, 0x44, 0x41,  # IDAT chunk
+        0x54, 0x78, 0x9C, 0x62, 0x00, 0x02, 0x00, 0x00,  # compressed data
+        0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00,  # end
+        0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE,  # IEND
+        0x42, 0x60, 0x82
+    ])
+
+
+def create_test_jpeg() -> bytes:
+    """Create minimal valid JPEG data for testing."""
+    # Minimal JPEG structure
+    return bytes([
+        0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46,  # JPEG header
+        0x49, 0x46, 0x00, 0x01, 0x01, 0x01, 0x00, 0x48,  # JFIF
+        0x00, 0x48, 0x00, 0x00, 0xFF, 0xDB, 0x00, 0x43,  # Quantization table
+        # ... minimal quantization table and data ...
+        0xFF, 0xD9  # End of image
+    ])
+
+
+def validate_optimization_result(original_data: bytes, optimized_data: bytes, min_savings: float = 0.05) -> bool:
+    """Validate that optimization result meets minimum savings requirement."""
+    if not optimized_data or len(optimized_data) == 0:
+        return False
+        
+    savings = (len(original_data) - len(optimized_data)) / len(original_data)
+    return savings >= min_savings
+
+
+def measure_performance(func, *args, **kwargs):
+    """Simple performance measurement utility."""
+    import time
+    start = time.time()
+    result = func(*args, **kwargs)
+    duration = time.time() - start
+    return result, duration
