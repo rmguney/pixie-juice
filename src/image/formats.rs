@@ -16,6 +16,8 @@ pub enum ImageFormat {
     TIFF,
     SVG,
     ICO,
+    TGA,
+    AVIF,
 }
 
 impl ImageFormat {
@@ -43,6 +45,8 @@ impl ImageFormat {
             Self::TIFF => "image/tiff",
             Self::SVG => "image/svg+xml",
             Self::ICO => "image/vnd.microsoft.icon",
+            Self::TGA => "image/x-targa",
+            Self::AVIF => "image/avif",
         }
     }
 
@@ -56,6 +60,8 @@ impl ImageFormat {
             Self::TIFF => "tiff",
             Self::SVG => "svg",
             Self::ICO => "ico",
+            Self::TGA => "tga",
+            Self::AVIF => "avif",
         }
     }
 }
@@ -110,12 +116,45 @@ pub fn detect_image_format(data: &[u8]) -> OptResult<ImageFormat> {
         return Ok(ImageFormat::ICO);
     }
 
-    // SVG: Check for SVG text signature (FIXED - consolidated detection)
-    if let Ok(text) = core::str::from_utf8(data) {
-        let trimmed = text.trim_start();
-        if trimmed.starts_with("<?xml") && trimmed.contains("<svg") ||
-           trimmed.starts_with("<svg") {
-            return Ok(ImageFormat::SVG);
+    // TGA: Has no magic signature, use footer or heuristics
+    // TGA v2.0 has a footer "TRUEVISION-XFILE." at the end
+    if data.len() >= 26 {
+        let footer_start = data.len() - 26;
+        if &data[footer_start..footer_start + 16] == b"TRUEVISION-XFILE" {
+            return Ok(ImageFormat::TGA);
+        }
+    }
+    // TGA v1.0 heuristic: check structure with VERY lenient validation for now
+    if data.len() >= 18 {
+        let image_type = data[2];
+        if matches!(image_type, 0 | 1 | 2 | 3 | 9 | 10 | 11) {
+            let width = u16::from_le_bytes([data[12], data[13]]);
+            let height = u16::from_le_bytes([data[14], data[15]]);
+            let color_map_type = data[1];
+            
+            // Very lenient validation for TGA detection - prioritize detection over strict validation
+            let reasonable_dims = width > 0 && height > 0;
+            let valid_color_map = color_map_type <= 1;
+            
+            // Accept if basic structure seems right (image type 2 is uncompressed RGB, very common)
+            if valid_color_map && reasonable_dims {
+                return Ok(ImageFormat::TGA);
+            }
+        }
+    }
+
+    // AVIF: Check for AVIF signature ftypavif  
+    if data.len() >= 16 && &data[4..8] == b"ftyp" {
+        // Major brand + minor version then compatible brands
+        if &data[8..12] == b"avif" {
+            return Ok(ImageFormat::AVIF);
+        }
+        // Scan first few compatible brands area for avif/avis
+        let scan_len = core::cmp::min(data.len(), 64);
+        for i in 8..scan_len.saturating_sub(3) {
+            if &data[i..i+4] == b"avif" || &data[i..i+4] == b"avis" {
+                return Ok(ImageFormat::AVIF);
+            }
         }
     }
 

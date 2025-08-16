@@ -1603,6 +1603,10 @@ export function __wbg_log_0cc1b7768397bcfe(arg0, arg1, arg2, arg3, arg4, arg5, a
     }
 };
 
+export function __wbg_log_8a185c59294f9f1f(arg0, arg1) {
+    console.log(getStringFromWasm0(arg0, arg1));
+};
+
 export function __wbg_log_c222819a41e063d3(arg0) {
     console.log(getObject(arg0));
 };
@@ -1617,10 +1621,6 @@ export function __wbg_log_cb9e190acc5753fb(arg0, arg1) {
     } finally {
         wasm.__wbindgen_export_1(deferred0_0, deferred0_1, 1);
     }
-};
-
-export function __wbg_log_f1fa34c172ccf45a(arg0, arg1) {
-    console.log(getStringFromWasm0(arg0, arg1));
 };
 
 export function __wbg_mark_7438147ce31e9d4b(arg0, arg1) {
@@ -1664,7 +1664,7 @@ export function __wbg_newnoargs_105ed471475aaf50(arg0, arg1) {
     return addHeapObject(ret);
 };
 
-export function __wbg_now_11a8db9c652e9b06() {
+export function __wbg_now_7f43f6c42e10de17() {
     const ret = performance.now();
     return ret;
 };
@@ -1710,7 +1710,7 @@ export function __wbg_static_accessor_SELF_37c5d418e4bf5819() {
     return isLikeNone(ret) ? 0 : addHeapObject(ret);
 };
 
-export function __wbg_static_accessor_USED_JS_HEAP_SIZE_11e85d0aee7328f4() {
+export function __wbg_static_accessor_USED_JS_HEAP_SIZE_cc22c16fa39daffa() {
     const ret = performance.memory.usedJSHeapSize;
     return addHeapObject(ret);
 };
@@ -1720,11 +1720,7 @@ export function __wbg_static_accessor_WINDOW_5de37043a91a9c40() {
     return isLikeNone(ret) ? 0 : addHeapObject(ret);
 };
 
-export function __wbg_warn_4ca3906c248c47c4(arg0) {
-    console.warn(getObject(arg0));
-};
-
-export function __wbg_warn_b97c33619330f8cf(arg0, arg1) {
+export function __wbg_warn_a8f48f6ba63d7583(arg0, arg1) {
     console.warn(getStringFromWasm0(arg0, arg1));
 };
 

@@ -34,18 +34,15 @@ export default function FileDropZone({ selectedFiles, setSelectedFiles, onFileSe
         return true;
       }
       
-      // Check for image formats by file extension - ONLY CORE FORMATS (Phase 1)
       const imageExtensions = [
-        '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.ico', '.tiff', '.tif', '.svg'
-        // Advanced formats commented out until Phase 3:
-        // '.avif', '.heic', '.heif', '.hdr', '.exr'
+  '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.ico', '.tiff', '.tif', '.svg', '.tga', '.avif'
+
       ];
       
       if (imageExtensions.some(ext => fileName.endsWith(ext))) {
         return true;
       }
       
-      // Check for 3D models by file extension - ONLY CORE FORMATS (Phase 2)
       const meshExtensions = [
         '.obj', '.ply', '.gltf', '.glb'
       ];
@@ -58,7 +55,7 @@ export default function FileDropZone({ selectedFiles, setSelectedFiles, onFileSe
     });
 
     if (supportedFiles.length === 0) {
-      alert('Please select valid files:\n• Images: PNG, JPEG, WebP, GIF, BMP, ICO, TIFF, SVG\n• 3D Models: OBJ, PLY, GLTF, GLB\n\n(Advanced formats like AVIF, HEIC, STL, FBX will be supported in future phases)');
+  alert('Please select valid files:\n• Images: PNG, JPEG, WebP, GIF, BMP, ICO, TIFF, SVG, TGA, AVIF\n• 3D Models: OBJ, PLY, GLTF, GLB\n\n(Advanced formats like HEIC, STL, FBX will be supported in future phases)');
       return;
     }
 
@@ -116,7 +113,7 @@ export default function FileDropZone({ selectedFiles, setSelectedFiles, onFileSe
           <h3 className="text-sm font-normal text-white mb-1.5">Drop files or click to upload</h3>
           <p className="text-xs text-neutral-500 mb-4">
             Currently supported media formats: <br />
-            PNG, JPEG, WebP, GIF, BMP, TIFF, SVG<br />
+            PNG, JPEG, WebP, GIF, BMP, TIFF, SVG, TGA, AVIF<br />
           </p>
           <button className="px-4 py-2 border border-white text-white text-sm rounded hover:bg-white hover:text-black transition-colors">
             Choose Files
@@ -126,7 +123,7 @@ export default function FileDropZone({ selectedFiles, setSelectedFiles, onFileSe
           id="file-input"
           type="file"
           multiple
-          accept=".png,.jpg,.jpeg,.gif,.webp,.bmp,.ico,.tiff,.tif,.svg,.obj,.ply,.gltf,.glb"
+          accept=".png,.jpg,.jpeg,.gif,.webp,.bmp,.ico,.tiff,.tif,.svg,.tga,.avif,.obj,.ply,.gltf,.glb"
           onChange={handleFileSelect}
           className="hidden"
         />
@@ -159,6 +156,8 @@ export default function FileDropZone({ selectedFiles, setSelectedFiles, onFileSe
                       const fileName = file.name.toLowerCase();
                       const isImage = file.type.startsWith('image/') || 
                                     fileName.endsWith('.svg') || 
+                                    fileName.endsWith('.tga') || 
+                                    fileName.endsWith('.avif') || 
                                     fileName.endsWith('.ico') || 
                                     fileName.endsWith('.png') || 
                                     fileName.endsWith('.jpg') || 

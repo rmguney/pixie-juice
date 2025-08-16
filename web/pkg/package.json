@@ -4,7 +4,7 @@
   "collaborators": [
     "rmguney"
   ],
-  "version": "0.3.0",
+  "version": "0.1.0",
   "files": [
     "pixie_juice_bg.wasm",
     "pixie_juice.js",

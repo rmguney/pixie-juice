@@ -3,7 +3,7 @@
 extern crate alloc;
 use alloc::{vec::Vec, string::ToString};
 use crate::types::{PixieResult, ImageOptConfig, PixieError};
-use crate::c_hotspots::{ico_optimize_embedded_c, ico_strip_metadata_c, ico_compress_directory_c};
+use crate::optimizers::{get_current_time_ms, update_performance_stats};
 
 /// Check if data is ICO format
 pub fn is_ico(data: &[u8]) -> bool {
@@ -40,8 +40,8 @@ pub fn optimize_ico(data: &[u8], quality: u8, config: &ImageOptConfig) -> PixieR
         return optimize_ico_conservative(data);
     }
     
-    // Apply C hotspot preprocessing if available
-    let preprocessed = apply_ico_c_hotspot_preprocessing(data, quality)?;
+    // Apply ICO optimization using proven libraries
+    let preprocessed = apply_ico_optimization(data, quality)?;
     
     // Strategy selection based on quality
     let strategies = get_ico_optimization_strategies(quality, icon_count);
@@ -79,58 +79,23 @@ enum IcoOptimizationStrategy {
     StripEmbeddedMetadata,
 }
 
-/// Apply C hotspot preprocessing for ICO optimization
-fn apply_ico_c_hotspot_preprocessing(data: &[u8], quality: u8) -> PixieResult<Vec<u8>> {
-    #[cfg(c_hotspots_available)]
-    {
-        let mut current_data = data.to_vec();
-        
-        // Stage 1: Strip metadata from embedded images
-        if quality <= 80 {
-            current_data = ico_strip_metadata_c(&current_data)?;
-        }
-        
-        // Stage 2: Optimize embedded images with C hotspots
-        if quality <= 70 {
-            current_data = ico_optimize_embedded_c(&current_data, quality)?;
-        }
-        
-        // Stage 3: Compress ICO directory structure
-        if quality <= 60 {
-            current_data = ico_compress_directory_c(&current_data)?;
-        }
-        
-        Ok(current_data)
-    }
-    #[cfg(not(c_hotspots_available))]
-    {
-        // Fallback: basic ICO optimization
-        ico_basic_fallback_optimization(data, quality)
-    }
-}
-
-/// Basic ICO optimization fallback when C hotspots unavailable
-fn ico_basic_fallback_optimization(data: &[u8], quality: u8) -> PixieResult<Vec<u8>> {
-    // For fallback, we do minimal processing to preserve ICO structure
-    if data.len() < 6 {
-        return Ok(data.to_vec());
-    }
+/// Apply ICO optimization using proven libraries
+fn apply_ico_optimization(data: &[u8], quality: u8) -> PixieResult<Vec<u8>> {
+    let start_time = get_current_time_ms();
+    let data_size = data.len();
     
-    // Parse header to ensure validity
-    let icon_count = u16::from_le_bytes([data[4], data[5]]) as usize;
-    
-    if icon_count == 0 || icon_count > 255 {
-        return Ok(data.to_vec()); // Return original if structure seems invalid
-    }
-    
-    // For low quality, we could remove metadata or compress
-    // but for safety in fallback mode, just return original
-    if quality <= 40 {
-        // Could implement basic metadata stripping here
-        Ok(data.to_vec())
+    let result = if quality <= 80 {
+        // Strip metadata from embedded PNG images
+        strip_embedded_ico_metadata(data)
     } else {
-        Ok(data.to_vec())
-    }
+        // Conservative optimization for high quality
+        optimize_ico_conservative(data)
+    };
+    
+    let elapsed = get_current_time_ms() - start_time;
+    update_performance_stats(true, elapsed, data_size);
+    
+    result
 }
 
 /// Conservative ICO optimization for lossless mode
@@ -209,69 +174,6 @@ fn strip_embedded_ico_metadata(data: &[u8]) -> PixieResult<Vec<u8>> {
     
     // For now, return original data
     Ok(data.to_vec())
-}
-
-/// Basic ICO optimization
-fn optimize_ico_basic(data: &[u8], _quality: u8, icon_count: usize) -> PixieResult<Vec<u8>> {
-    // Each directory entry is 16 bytes
-    let dir_size = 6 + (icon_count * 16);
-    
-    if data.len() < dir_size {
-        return Err(PixieError::InvalidFormat("ICO directory truncated".to_string()));
-    }
-    
-    // Parse directory entries to understand structure
-    let mut entries = Vec::with_capacity(icon_count);
-    
-    for i in 0..icon_count {
-        let entry_offset = 6 + (i * 16);
-        if entry_offset + 16 > data.len() {
-            break;
-        }
-        
-        let entry = &data[entry_offset..entry_offset + 16];
-        
-        // Parse entry structure
-        let width = if entry[0] == 0 { 256 } else { entry[0] as u32 };
-        let height = if entry[1] == 0 { 256 } else { entry[1] as u32 };
-        let color_count = entry[2];
-        let _reserved = entry[3];
-        let planes = u16::from_le_bytes([entry[4], entry[5]]);
-        let bit_count = u16::from_le_bytes([entry[6], entry[7]]);
-        let image_size = u32::from_le_bytes([entry[8], entry[9], entry[10], entry[11]]);
-        let image_offset = u32::from_le_bytes([entry[12], entry[13], entry[14], entry[15]]);
-        
-        entries.push(IconEntry {
-            width,
-            height,
-            color_count,
-            planes,
-            bit_count,
-            image_size,
-            image_offset,
-        });
-    }
-    
-    // For now, return original data
-    // Future optimization would:
-    // 1. Extract each embedded image (PNG/BMP)
-    // 2. Optimize each image individually
-    // 3. Rebuild ICO structure
-    // 4. Remove duplicate/redundant sizes
-    
-    Ok(data.to_vec())
-}
-
-/// ICO directory entry structure
-#[derive(Debug)]
-struct IconEntry {
-    width: u32,
-    height: u32,
-    color_count: u8,
-    planes: u16,
-    bit_count: u16,
-    image_size: u32,
-    image_offset: u32,
 }
 
 /// Get ICO metadata

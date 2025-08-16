@@ -111,7 +111,7 @@ export default function ProcessingPanel({ files, wasm, onProcess, setIsProcessin
             const fileExtension = file.name.toLowerCase().split('.').pop();
             const isImageFile = file.type.startsWith('image/') || 
                               fileExtension === 'svg' || 
-                              ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico', 'tiff', 'tif'].includes(fileExtension);
+                              ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico', 'tiff', 'tif', 'tga', 'targa', 'avif'].includes(fileExtension);
                               
             if (isImageFile) {
               fileType = 'image';

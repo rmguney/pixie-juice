@@ -5,6 +5,7 @@
 extern crate alloc;
 use alloc::{vec, vec::Vec, string::String, format, string::ToString};
 use crate::types::{PixieResult, PixieError};
+use crate::optimizers::{get_current_time_ms, update_performance_stats};
 
 // Include the generated bindings when C hotspots are enabled
 #[cfg(c_hotspots_available)]
@@ -31,9 +32,9 @@ extern "C" {
     fn svg_compress_text(data: *const u8, data_len: usize, 
                         compression_level: u32, 
                         output_size: *mut usize) -> *mut u8;
-    fn svg_minify_markup_simd(data: *const u8, data_len: usize, 
-                             preserve_whitespace: bool, 
-                             output_size: *mut usize) -> *mut u8;
+    // Corrected signature to match C implementation in hotspots/src/util.c:
+    // int svg_minify_markup_simd(const uint8_t* input, size_t input_size, uint8_t* output, size_t* output_size)
+    fn svg_minify_markup_simd(input: *const u8, input_size: usize, output: *mut u8, output_size: *mut usize) -> i32;
     fn svg_optimize_paths(data: *const u8, data_len: usize, 
                          precision: f32, 
                          output_size: *mut usize) -> *mut u8;
@@ -520,7 +521,6 @@ fn compress_data_rust_fallback(input: &[u8]) -> PixieResult<Vec<u8>> {
 #[cfg(c_hotspots_available)]
 pub mod image {
     use super::*;
-    use crate::optimizers::{get_current_time_ms, update_performance_stats};
     
     /// Octree color quantization with C hotspot and CRITICAL performance tracking
     /// COMPLIANCE: >15% performance improvement documented through benchmarks
@@ -929,7 +929,6 @@ pub mod image {
 #[cfg(c_hotspots_available)]
 pub mod mesh {
     use super::*;
-    use crate::optimizers::{get_current_time_ms, update_performance_stats};
     
     /// Decimate mesh using Quadric Error Metrics in C with CRITICAL performance tracking
     /// COMPLIANCE: >15% performance improvement documented through benchmarks
@@ -1084,26 +1083,22 @@ pub fn svg_text_compress(data: &[u8]) -> PixieResult<Vec<u8>> {
 pub fn svg_minify_markup(data: &[u8]) -> PixieResult<Vec<u8>> {
     #[cfg(c_hotspots_available)]
     {
-        let mut output_data = vec![0u8; data.len()];
-        let mut output_size = output_data.len();
-        
-        let result = unsafe {
+        // Allocate an output buffer the same size as input (minified output will be <= input)
+        let mut output = vec![0u8; data.len()];
+        let mut output_size = output.len();
+        let status = unsafe {
             svg_minify_markup_simd(
                 data.as_ptr(),
                 data.len(),
-                false, // don't preserve whitespace for minification
+                output.as_mut_ptr(),
                 &mut output_size
             )
         };
-        
-        if !result.is_null() && output_size > 0 {
-            // Copy the result from C-allocated memory
-            let result_data = unsafe { 
-                core::slice::from_raw_parts(result, output_size).to_vec()
-            };
-            Ok(result_data)
+        if status == 0 && output_size <= output.len() {
+            output.truncate(output_size);
+            Ok(output)
         } else {
-            Err(PixieError::OptimizationFailed(format!("SVG markup minification returned null")))
+            Err(PixieError::OptimizationFailed("SVG markup minification failed".to_string()))
         }
     }
     #[cfg(not(c_hotspots_available))]
@@ -1278,7 +1273,6 @@ pub fn ico_compress_directory_c(data: &[u8]) -> PixieResult<Vec<u8>> {
 
 /// TIFF LZW compression using C hotspot with SIMD acceleration
 pub fn compress_tiff_lzw_c_hotspot(rgba_data: &[u8], width: usize, height: usize, quality: u8) -> PixieResult<Vec<u8>> {
-    use crate::optimizers::{get_current_time_ms, update_performance_stats};
     
     #[cfg(c_hotspots_available)]
     {
@@ -1326,7 +1320,6 @@ pub fn compress_tiff_lzw_c_hotspot(rgba_data: &[u8], width: usize, height: usize
 
 /// TIFF metadata stripping using C hotspot with SIMD acceleration
 pub fn strip_tiff_metadata_c_hotspot(tiff_data: &[u8], preserve_icc: bool) -> PixieResult<Vec<u8>> {
-    use crate::optimizers::{get_current_time_ms, update_performance_stats};
     
     #[cfg(c_hotspots_available)]
     {
@@ -1692,7 +1685,7 @@ fn filter_apply_rust_fallback(
 ) -> PixieResult<()> {
     let kernel_size = (kernel.len() as f32).sqrt() as usize;
     let half_kernel = kernel_size / 2;
-    let mut temp_data = rgba_data.to_vec();
+    let temp_data = rgba_data.to_vec();
     
     for y in half_kernel..height - half_kernel {
         for x in half_kernel..width - half_kernel {

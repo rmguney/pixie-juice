@@ -227,7 +227,7 @@ impl ImageOptimizer {
                 #[cfg(target_arch = "wasm32")]
                 log_to_console("🎯 Routing to AVIF-specific optimization");
                 
-                return avif::optimize_avif(data, quality, &self.config)
+                return avif::optimize_avif(data, quality)
                     .map_err(|e| OptError::ProcessingError(format!("AVIF optimization failed: {:?}", e)));
             },
             _ => {
@@ -433,7 +433,7 @@ impl ImageOptimizer {
                 }
             },
             PixieImageFormat::Tga => {
-                if let Ok(tga_output) = tga::optimize_tga(data, quality, &self.config) {
+                if let Ok(tga_output) = tga::optimize_tga(data, quality) {
                     if tga_output.len() < best_size {
                         best_output = tga_output;
                         best_size = best_output.len();
@@ -441,7 +441,7 @@ impl ImageOptimizer {
                 }
             },
             PixieImageFormat::Avif => {
-                if let Ok(avif_output) = avif::optimize_avif(data, quality, &self.config) {
+                if let Ok(avif_output) = avif::optimize_avif(data, quality) {
                     if avif_output.len() < best_size {
                         best_output = avif_output;
                         best_size = best_output.len();

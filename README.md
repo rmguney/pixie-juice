@@ -24,26 +24,26 @@ Pixie Juice is a client side WebAssembly application built with Rust and C that 
 - **Interactive Preview**: 3D model viewer in browser
 - **Format Conversion**: Convert between formats
 
-### Current Status of Individual Formats
+### Current Status of Individual Formats (Updated August 16, 2025)
 
-| Format | Status | Compression | Hotspots | Performance |
-|--------|--------|-------------|----------|-------------|
-| **PNG** | ✅ Working | 10-63% | ⚠️ Partial | 82-1870ms |
-| **JPEG** | ✅ Working | 15-69% | ✅ Complete | 17-720ms |
-| **WebP** | ✅ Working | 5-30% | ✅ Complete | 11-761ms |
-| **BMP** | ✅ Working | 94-98% | ✅ Complete | 11-86ms |
-| **TIFF** | ✅ Working | 98-99% | ✅ Complete | 20-416ms |
-| **GIF** | ✅ Working | 0.6-94% | ✅ Complete | 1-19ms |
-| **ICO** | ✅ Working | 10-25% | ✅ Complete | <50ms |
-| **SVG** | ⚠️ Issues | 5-15% | ⚠️ Memory Error | Variable |
-| **TGA** | ❌ Broken | N/A | ❌ Not Detected | N/A |
-| **AVIF** | ❌ Broken | N/A | ❌ Not Detected | N/A |
-| **OBJ** | ⚠️ Partial | 26-100% | ✅ Complete | <3ms |
-| **PLY** | ⚠️ Partial | 16.9% | ✅ Complete | <1ms |
-| **glTF** | ✅ Working | 50.5% | ✅ Complete | <1ms |
-| **GLB** | ⚠️ Issues | 50.1% | ✅ Complete | <1ms |
-| **STL** | ❌ Broken | N/A | ❌ Not Supported | N/A |
-| **FBX** | ❌ Broken | N/A | ❌ Not Supported | N/A |
+| Format | Status | Compression | Notes |
+|--------|--------|-------------|----------|
+| **PNG** | ✅ Working | 30-68% | ✅ Complete - All sizes working |
+| **JPEG** | ✅ Working | 15-69% | ✅ Complete - Quality control working |
+| **WebP** | ✅ Working | Various | ⚠️ Animated file support |
+| **BMP** | ✅ Working | 94-98% | ✅ Complete - Excellent compression |
+| **TIFF** | ⚠️ Issues | 98-99% | ⚠️ Small files C hotspot error |
+| **GIF** | ✅ Working | 0.6-9% | ⚠️ Animated file support |
+| **ICO** | ✅ Working | 4-12% | ✅ Complete - All sizes working |
+| **SVG** | ✅ Working | 7-13% | ✅ Complete - SIMD optimization |
+| **TGA** | ⚠️ Issues | 95% | ⚠️ 16-bit depth not supported |
+| **AVIF** | ❌ Broken | N/A | ❌ Format detection failed |
+| **OBJ** | ✅ Working | 26-100% | ✅ Complete - High compression |
+| **PLY** | ⚠️ Partial | 16.9% | ⚠️ Binary format parsing issues |
+| **glTF** | ✅ Working | 50.5% | ✅ Complete - Works with fallback |
+| **GLB** | ⚠️ Issues | 50.1% | ⚠️ Parsing errors but functional |
+| **STL** | ❌ Broken | N/A | ❌ UI recognition issue |
+| **FBX** | ❌ Broken | N/A | ❌ UI recognition issue |
 
 ## Phase 2 - Performance and Platform Enhancements (hopefully one day)
 
