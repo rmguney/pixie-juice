@@ -1,0 +1,167 @@
+# Rust build artifacts
+target/
+Cargo.lock
+
+# C build artifacts
+*.o
+*.a
+*.so
+*.dll
+*.dylib
+*.lib
+*.exp
+*.pdb
+*.exe
+
+# Temporary Rust files
+*.rlib
+*.pdb
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Conda/Mamba environment
+.conda/
+.mamba/
+
+# Node.js (for potential webapp tooling)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Test outputs and artifacts
+tests/fixtures/
+.benchmarks/
+tests/*.json
+*.html
+*.tmp
+*.temp
+*.gz
+*.zip
+*.tar
+*.rar
+*.tgz
+
+# Backup files
+*.backup
+*.bak
+*_old.*
+*_new.*
+
+# FFmpeg temporary files
+*.ffmpeg_tmp
+
+# Log files
+*.log
+
+# Coverage reports
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# Documentation
+docs/_build/
+site/
+*.md
+!README.md
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+.dev-config.json
+*.local.json
+
+# Custom binary names that might be generated
+pxjc
+pxjc.exe
+pixel-squish
+pixel-squish.exe
+
+# Rust-analyzer cache
+.rust-analyzer/
+
+# Fixtures
+tests/fixtures/
+
+# Miscellaneous
+.benchmarks/
+tests/*.json
+*.html
+*.tmp
+*.temp
+*.gz
+*.zip
+*.tar
+*.rar
+*.tgz
+
+#! next below
+
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+web/.next
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files
+.env*
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts

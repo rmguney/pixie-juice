@@ -1,0 +1,21 @@
+[build]
+# Default target for WASM builds
+# target = "wasm32-unknown-unknown"
+
+[target.wasm32-unknown-unknown]
+# Use wasm-bindgen specific settings
+runner = "wasm-bindgen-test-runner"
+
+# Optimizations for WASM builds
+[target.wasm32-unknown-unknown.dependencies]
+# Override some dependencies for WASM compatibility
+
+# Ensure proper linking for WASM
+[profile.release]
+lto = true
+opt-level = "s"  # Optimize for size in WASM builds
+panic = "abort"
+
+[env]
+# Ensure C hotspots work with WASM
+EMMAKEN_CFLAGS = "-O3 -flto"

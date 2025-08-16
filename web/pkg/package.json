@@ -1,0 +1,20 @@
+{
+  "name": "@pixie-juice/pixie-juice",
+  "type": "module",
+  "collaborators": [
+    "rmguney"
+  ],
+  "version": "0.1.0",
+  "files": [
+    "pixie_juice_bg.wasm",
+    "pixie_juice.js",
+    "pixie_juice_bg.js",
+    "pixie_juice.d.ts"
+  ],
+  "main": "pixie_juice.js",
+  "types": "pixie_juice.d.ts",
+  "sideEffects": [
+    "./pixie_juice.js",
+    "./snippets/*"
+  ]
+}

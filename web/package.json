@@ -1,0 +1,25 @@
+{
+  "name": "pixie-juice",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "build:wasm": "cd .. && wasm-pack build --target bundler --out-dir web/pkg --scope pixie-juice --release",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@react-three/drei": "^10.4.2",
+    "@react-three/fiber": "^9.2.0",
+    "next": "^15.3.5",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "three": "^0.178.0",
+    "three-stdlib": "^2.36.0"
+  },
+  "devDependencies": {
+    "postcss": "^8",
+    "tailwindcss": "^3.4.1"
+  }
+}
