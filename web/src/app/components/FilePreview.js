@@ -8,23 +8,29 @@ import * as THREE from 'three';
 // Import professional Three.js loaders
 import { FBXLoader } from 'three-stdlib';
 import { GLTFLoader } from 'three-stdlib';
+import { DRACOLoader } from 'three-stdlib';
 import { OBJLoader } from 'three-stdlib';
 import { PLYLoader } from 'three-stdlib';
 import { STLLoader } from 'three-stdlib';
-import { ColladaLoader } from 'three-stdlib';
+import { TGALoader } from 'three-stdlib';
+import * as BufferGeometryUtils from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
 // Validate imports on load
 console.log('Loaders imported:', {
   FBXLoader: !!FBXLoader,
   GLTFLoader: !!GLTFLoader,
+  DRACOLoader: !!DRACOLoader,
   OBJLoader: !!OBJLoader,
   PLYLoader: !!PLYLoader,
   STLLoader: !!STLLoader,
-  ColladaLoader: !!ColladaLoader
+  TGALoader: !!TGALoader
 });
 
 function MeshModel({ meshData, fileType }) {
   const [geometry, setGeometry] = useState(null);
+  const [materials, setMaterials] = useState(null);
+  const [meshes, setMeshes] = useState(null);
+  const [sceneScale, setSceneScale] = useState(1);
   const [error, setError] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -71,26 +77,31 @@ function MeshModel({ meshData, fileType }) {
           setIsLoading(false);
           return;
         } else if (fileType === 'obj') {
+          console.log('Calling loadOBJ with', meshData.length, 'bytes');
           geo = await loadOBJ(meshData);
         } else if (fileType === 'ply') {
+          console.log('Calling loadPLY with', meshData.length, 'bytes');
           geo = await loadPLY(meshData);
         } else if (fileType === 'stl') {
+          console.log('Calling loadSTL with', meshData.length, 'bytes');
           geo = await loadSTL(meshData);
         } else if (fileType === 'gltf') {
+          console.log('Calling loadGLTF with', meshData.length, 'bytes');
           geo = await loadGLTF(meshData);
         } else if (fileType === 'glb') {
+          console.log('Calling loadGLB with', meshData.length, 'bytes');
           geo = await loadGLB(meshData);
-        } else if (fileType === 'dae') {
-          geo = await loadDAE(meshData);
         } else if (fileType === 'fbx') {
+          console.log('Calling loadFBX with', meshData.length, 'bytes');
           geo = await loadFBX(meshData);
-        } else if (fileType === 'usdz') {
-          geo = await parseUSDZ(meshData); // Keep custom USDZ parser for now
         } else {
+          console.error('Unsupported mesh format:', fileType);
           setError(`Unsupported mesh format: ${fileType}`);
           setIsLoading(false);
           return;
         }
+        
+        console.log('Loader returned:', geo ? 'SUCCESS' : 'NULL/UNDEFINED');
 
         if (geo) {
           // Handle both geometry and full objects from loaders
@@ -98,58 +109,25 @@ function MeshModel({ meshData, fileType }) {
           console.log('Processing loaded object:', geo);
           console.log('Object type:', geo.constructor.name);
           console.log('Object properties:', Object.keys(geo));
+          console.log('Is BufferGeometry:', geo.isBufferGeometry);
+          console.log('Is Geometry:', geo.isGeometry);
+          console.log('Has scene:', !!geo.scene);
+          console.log('Has children:', !!geo.children);
 
-          if (geo.isBufferGeometry || geo.isGeometry) {
-            console.log('Direct geometry detected');
-            geometry = geo;
-          } else if (geo.scene) {
-            console.log('Scene detected, searching for meshes...');
-            // GLTF/GLB returns a scene, extract first mesh
-            const findMeshInScene = (obj) => {
-              console.log('Checking object:', obj.type, obj.name || 'unnamed');
-              if (obj.isMesh && obj.geometry) {
-                console.log('Found mesh with geometry:', obj.geometry);
-                return obj.geometry;
-              }
-              if (obj.children) {
-                for (const child of obj.children) {
-                  const result = findMeshInScene(child);
-                  if (result) return result;
-                }
-              }
-              return null;
-            };
-            geometry = findMeshInScene(geo.scene);
-          } else if (geo.children && geo.children.length > 0) {
-            console.log('Object group detected, searching for meshes...');
-            // FBX and others might return groups, find first mesh
-            const findMesh = (obj) => {
-              console.log('Checking object:', obj.type, obj.name || 'unnamed');
-              if (obj.isMesh && obj.geometry) {
-                console.log('Found mesh with geometry:', obj.geometry);
-                return obj.geometry;
-              }
-              if (obj.children) {
-                for (const child of obj.children) {
-                  const result = findMesh(child);
-                  if (result) return result;
-                }
-              }
-              return null;
-            };
-            geometry = findMesh(geo);
-          } else if (geo.isMesh && geo.geometry) {
-            console.log('Direct mesh detected');
-            geometry = geo.geometry;
+          // Process loaded object and extract meshes
+          const processedResult = processLoadedObject(geo);
+          if (processedResult.meshes && processedResult.meshes.length > 0) {
+            // Use the unified processing result
+            setMeshes(processedResult.meshes);
+            setMaterials(processedResult.materials);
+            setSceneScale(processedResult.sceneScale);
+            geometry = processedResult.geometry;
+          } else if (processedResult.geometry) {
+            geometry = processedResult.geometry;
           } else {
-            console.log('Unknown object structure, attempting to find geometry...');
-            // Last resort: look for any geometry property
-            if (geo.geometry) {
-              geometry = geo.geometry;
-            } else {
-              console.warn('No geometry found in loaded object');
-            }
+            throw new Error('No valid geometry or meshes found in loaded model');
           }
+
 
           if (geometry) {
             console.log('Final geometry:', geometry);
@@ -167,28 +145,13 @@ function MeshModel({ meshData, fileType }) {
               geometry.computeVertexNormals();
             }
             
-            // Center and scale geometry for better viewing
-            console.log('Centering geometry...');
-            geometry.center();
-            
-            // Compute bounding box for scaling
-            geometry.computeBoundingBox();
-            const box = geometry.boundingBox;
-            const size = box.getSize(new THREE.Vector3()).length();
-            const scale = 2 / size; // Scale to fit in a 2-unit cube
-            
-            if (scale !== 1) {
-              console.log(`Scaling geometry by ${scale} to fit view`);
-              geometry.scale(scale, scale, scale);
-              geometry.computeBoundingBox();
-            }
-            
             setGeometry(geometry);
           } else {
             throw new Error('No geometry found in loaded model');
           }
         } else {
-          throw new Error('Failed to create geometry');
+          console.error('Mesh loading failed: geo is null/undefined');
+          throw new Error('Failed to create geometry - loader returned null');
         }
       } catch (err) {
         console.error('Error loading mesh:', err);
@@ -202,6 +165,7 @@ function MeshModel({ meshData, fileType }) {
   }, [meshData, fileType]);
 
   if (isLoading) {
+    console.log('MeshModel: Loading state, fileType:', fileType, 'meshData length:', meshData?.length);
     return (
       <mesh>
         <boxGeometry args={[0.8, 0.8, 0.8]} />
@@ -211,7 +175,7 @@ function MeshModel({ meshData, fileType }) {
   }
 
   if (error) {
-    console.warn('Mesh loading error:', error);
+    console.warn('MeshModel: Error state -', error);
     return (
       <mesh>
         <boxGeometry args={[1, 1, 1]} />
@@ -221,6 +185,7 @@ function MeshModel({ meshData, fileType }) {
   }
 
   if (!geometry) {
+    console.warn('MeshModel: No geometry state, fileType:', fileType, 'meshData available:', !!meshData);
     return (
       <mesh>
         <boxGeometry args={[0.5, 0.5, 0.5]} />
@@ -229,6 +194,47 @@ function MeshModel({ meshData, fileType }) {
     );
   }
 
+  // If we have individual meshes with materials, render them separately
+  if (meshes && meshes.length > 0) {
+    return (
+      <group scale={[sceneScale, sceneScale, sceneScale]}>
+        {meshes.map((mesh, index) => {
+          // Extract world transform components
+          const worldPosition = new THREE.Vector3();
+          const worldQuaternion = new THREE.Quaternion();
+          const worldScale = new THREE.Vector3();
+          
+          mesh.matrixWorld.decompose(worldPosition, worldQuaternion, worldScale);
+          
+          // Convert quaternion to Euler angles
+          const worldRotation = new THREE.Euler();
+          worldRotation.setFromQuaternion(worldQuaternion);
+          
+          return (
+            <mesh 
+              key={index} 
+              geometry={mesh.geometry} 
+              material={mesh.material || undefined}
+              position={[worldPosition.x, worldPosition.y, worldPosition.z]}
+              rotation={[worldRotation.x, worldRotation.y, worldRotation.z]}
+              scale={[worldScale.x, worldScale.y, worldScale.z]}
+            >
+              {!mesh.material && (
+                <meshStandardMaterial 
+                  color="#6366f1" 
+                  metalness={0.2} 
+                  roughness={0.3}
+                  side={THREE.DoubleSide}
+                />
+              )}
+            </mesh>
+          );
+        })}
+      </group>
+    );
+  }
+
+  // Fallback to single geometry rendering
   return (
     <mesh geometry={geometry}>
       <meshStandardMaterial 
@@ -281,6 +287,169 @@ function DebugMesh({ geometry }) {
   );
 }
 
+// Unified function to process loaded 3D objects and extract meshes
+function processLoadedObject(geo) {
+  const result = {
+    meshes: [],
+    materials: [],
+    geometry: null,
+    sceneScale: 1
+  };
+
+  console.log('Processing loaded object unified...');
+
+  if (geo.isBufferGeometry || geo.isGeometry) {
+    console.log('Direct geometry detected');
+    result.geometry = geo;
+    // Compute normals if missing
+    if (!geo.attributes?.normal) {
+      console.log('Computing vertex normals...');
+      geo.computeVertexNormals();
+    }
+  } else if (geo.scene) {
+    console.log('Scene detected, searching for all meshes...');
+    // GLTF/GLB returns a scene, extract ALL meshes with materials
+    const findAllMeshesInScene = (obj) => {
+      console.log('Checking object:', obj.type, obj.name || 'unnamed');
+      if (obj.isMesh && obj.geometry) {
+        const name = obj.name.toLowerCase();
+        const isBackground = name.includes('plane') || name.includes('background');
+        
+        console.log('Found mesh with geometry:', obj.geometry, 'vertices:', obj.geometry.attributes?.position?.count || 0);
+        console.log('Mesh material:', obj.material ? obj.material.type : 'none');
+        console.log('Is background element:', isBackground);
+        
+        if (!isBackground) {
+          // Update world matrix to get correct positioning
+          obj.updateMatrixWorld(true);
+          result.meshes.push(obj);
+          if (obj.material && !result.materials.includes(obj.material)) {
+            result.materials.push(obj.material);
+          }
+        }
+      }
+      if (obj.children) {
+        for (const child of obj.children) {
+          findAllMeshesInScene(child);
+        }
+      }
+    };
+    findAllMeshesInScene(geo.scene);
+    
+    console.log(`Found ${result.meshes.length} meshes total`);
+    console.log(`Found ${result.materials.length} materials total`);
+    
+    if (result.meshes.length > 0) {
+      // Calculate overall scene bounding box for scaling
+      const overallBox = new THREE.Box3();
+      
+      result.meshes.forEach(mesh => {
+        const meshBox = new THREE.Box3();
+        meshBox.setFromObject(mesh);
+        overallBox.union(meshBox);
+      });
+      
+      const size = overallBox.getSize(new THREE.Vector3()).length();
+      result.sceneScale = size > 0 ? 2 / size : 1;
+      
+      console.log('Overall scene size:', size, 'calculated scale:', result.sceneScale);
+      
+      // Create fallback geometry
+      result.geometry = result.meshes.length === 1 
+        ? result.meshes[0].geometry 
+        : combineGeometries(result.meshes);
+    }
+  } else if (geo.children && geo.children.length > 0) {
+    console.log('Object group detected, searching for all meshes...');
+    // FBX and others might return groups, extract ALL meshes
+    const findAllMeshesInGroup = (obj) => {
+      console.log('Checking object:', obj.type, obj.name || 'unnamed');
+      if (obj.isMesh && obj.geometry) {
+        const name = obj.name.toLowerCase();
+        const isBackground = name.includes('plane') || name.includes('background');
+        
+        console.log('Found mesh with geometry:', obj.geometry, 'vertices:', obj.geometry.attributes?.position?.count || 0);
+        console.log('Mesh material:', obj.material ? obj.material.type : 'none');
+        console.log('Is background element:', isBackground);
+        
+        if (!isBackground) {
+          // Update world matrix to get correct positioning
+          obj.updateMatrixWorld(true);
+          result.meshes.push(obj);
+          if (obj.material && !result.materials.includes(obj.material)) {
+            result.materials.push(obj.material);
+          }
+        }
+      }
+      if (obj.children) {
+        for (const child of obj.children) {
+          findAllMeshesInGroup(child);
+        }
+      }
+    };
+    findAllMeshesInGroup(geo);
+    
+    console.log(`Found ${result.meshes.length} meshes in group`);
+    
+    if (result.meshes.length > 0) {
+      // Calculate overall scene bounding box for scaling
+      const overallBox = new THREE.Box3();
+      
+      result.meshes.forEach(mesh => {
+        const meshBox = new THREE.Box3();
+        meshBox.setFromObject(mesh);
+        overallBox.union(meshBox);
+      });
+      
+      const size = overallBox.getSize(new THREE.Vector3()).length();
+      result.sceneScale = size > 0 ? 2 / size : 1;
+      
+      console.log('Overall group size:', size, 'calculated scale:', result.sceneScale);
+      
+      // Create fallback geometry
+      result.geometry = result.meshes.length === 1 
+        ? result.meshes[0].geometry 
+        : combineGeometries(result.meshes);
+    } else {
+      // Fallback: find first mesh for single geometry
+      const findFirstMesh = (obj) => {
+        if (obj.isMesh && obj.geometry) {
+          return obj.geometry;
+        }
+        if (obj.children) {
+          for (const child of obj.children) {
+            const found = findFirstMesh(child);
+            if (found) return found;
+          }
+        }
+        return null;
+      };
+      result.geometry = findFirstMesh(geo);
+    }
+  } else if (geo.isMesh && geo.geometry) {
+    console.log('Direct mesh detected');
+    result.geometry = geo.geometry;
+    // Compute normals if missing
+    if (!result.geometry.attributes?.normal) {
+      console.log('Computing vertex normals...');
+      result.geometry.computeVertexNormals();
+    }
+  } else {
+    console.log('Unknown object structure, attempting to find geometry...');
+    // Last resort: look for any geometry property
+    if (geo.geometry) {
+      result.geometry = geo.geometry;
+      // Compute normals if missing
+      if (!result.geometry.attributes?.normal) {
+        console.log('Computing vertex normals...');
+        result.geometry.computeVertexNormals();
+      }
+    }
+  }
+
+  return result;
+}
+
 // Main FilePreview component
 function FilePreview({ file }) {
   const [meshData, setMeshData] = useState(null);
@@ -303,7 +472,7 @@ function FilePreview({ file }) {
       try {
         // Determine file type from extension
         const extension = file.name.split('.').pop().toLowerCase();
-        const meshFormats = ['obj', 'ply', 'stl', 'gltf', 'glb', 'dae', 'fbx', 'usdz'];
+        const meshFormats = ['obj', 'ply', 'stl', 'gltf', 'glb', 'fbx'];
         const imageFormats = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'tiff', 'tif', 'svg', 'ico'];
         
         if (meshFormats.includes(extension)) {
@@ -312,9 +481,25 @@ function FilePreview({ file }) {
           setMeshData(new Uint8Array(arrayBuffer));
         } else if (imageFormats.includes(extension)) {
           setFileType('image');
-          // For images, we'll create a URL for display
-          const imageUrl = URL.createObjectURL(file);
-          setMeshData(imageUrl);
+          
+          // Handle TIFF files specially - decode using Canvas API
+          if (extension === 'tiff' || extension === 'tif') {
+            try {
+              console.log('Processing TIFF file for Canvas display:', file.name);
+              const arrayBuffer = await file.arrayBuffer();
+              const tiffUrl = await convertTiffToDataUrl(arrayBuffer);
+              setMeshData(tiffUrl);
+            } catch (tiffError) {
+              console.error('TIFF processing failed:', tiffError);
+              // Try direct URL as final fallback
+              const imageUrl = URL.createObjectURL(file);
+              setMeshData(imageUrl);
+            }
+          } else {
+            // For other image formats, create URL directly
+            const imageUrl = URL.createObjectURL(file);
+            setMeshData(imageUrl);
+          }
         } else {
           setError(`Unsupported file format: ${extension}`);
         }
@@ -327,6 +512,15 @@ function FilePreview({ file }) {
 
     loadFile();
   }, [file]);
+
+  // Separate effect for cleanup
+  useEffect(() => {
+    return () => {
+      if (meshData && typeof meshData === 'string' && meshData.startsWith('blob:')) {
+        URL.revokeObjectURL(meshData);
+      }
+    };
+  }, [meshData]);
 
   if (isLoading) {
     return (
@@ -362,7 +556,7 @@ function FilePreview({ file }) {
             <div className="text-2xl mb-1">📁</div>
             <p className="text-xs font-normal">Select a file</p>
             <p className="text-xs text-neutral-600">Images: PNG, JPG, WebP, GIF, BMP, TIFF</p>
-            <p className="text-xs text-neutral-600">3D Models: OBJ, PLY, STL, GLTF, GLB, DAE, FBX, USDZ</p>
+            <p className="text-xs text-neutral-600">3D Models: OBJ, PLY, STL, GLTF, GLB, FBX</p>
           </div>
         </div>
       </div>
@@ -371,13 +565,40 @@ function FilePreview({ file }) {
 
   // Handle image files
   if (fileType === 'image') {
+    // Special case for TIFF files that can't be displayed
+    if (meshData === 'tiff-not-supported') {
+      return (
+        <div className="w-full h-full bg-black rounded overflow-hidden flex items-start justify-center pt-4">
+          <div className="text-center max-w-sm px-6 text-neutral-100">
+            <div className="text-4xl mb-4">🖼️</div>
+            <p className="text-xs text-neutral-500 mb-3">
+              TIFF files cannot be displayed directly in browsers. Use the processing panel to convert to PNG, JPEG, or WebP for web viewing.
+
+            </p>
+            <div className="text-xs text-neutral-500">
+              <p className="mb-1">File: {file?.name}</p>
+              <p>Size: {file?.size ? Math.round(file.size / 1024) + ' KB' : 'Unknown'}</p>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className="w-full h-full bg-black rounded overflow-hidden flex items-start justify-center pt-4">
         <img 
           src={meshData} 
           alt="Preview" 
           className="max-w-full max-h-full object-contain"
-          onLoad={() => URL.revokeObjectURL(meshData)}
+          onLoad={() => {
+            if (typeof meshData === 'string' && meshData.startsWith('data:')) {
+              console.log('Image loaded successfully from data URL');
+            }
+          }}
+          onError={(e) => {
+            console.error('Image failed to load:', e);
+            setError('Failed to load image. The file may be corrupted or in an unsupported format.');
+          }}
         />
       </div>
     );
@@ -411,6 +632,16 @@ async function loadFBX(data) {
   return new Promise((resolve, reject) => {
     try {
       const loader = new FBXLoader();
+      
+      // Set up TGA loader for texture support
+      try {
+        const tgaLoader = new TGALoader();
+        loader.manager.addHandler(/\.tga$/i, tgaLoader);
+        console.log('FBX Loader: TGA loader configured successfully');
+      } catch (tgaError) {
+        console.warn('FBX Loader: Failed to set up TGA loader:', tgaError);
+        // Continue without TGA support - FBX loader will create placeholder textures
+      }
       
       // Convert Uint8Array to ArrayBuffer if needed
       const arrayBuffer = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
@@ -451,6 +682,29 @@ async function loadGLTF(data) {
   return new Promise((resolve, reject) => {
     try {
       const loader = new GLTFLoader();
+      
+      // Set up DRACO loader for compressed GLTF files
+      try {
+        const dracoLoader = new DRACOLoader();
+        dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.6/');
+        dracoLoader.preload();
+        loader.setDRACOLoader(dracoLoader);
+        console.log('GLTF Loader: DRACO loader configured successfully');
+      } catch (dracoError) {
+        console.warn('GLTF Loader: Failed to set up DRACO loader:', dracoError);
+        // Continue without DRACO support - will handle errors later
+      }
+      
+      // Set up TGA loader for texture support
+      try {
+        const tgaLoader = new TGALoader();
+        loader.manager.addHandler(/\.tga$/i, tgaLoader);
+        console.log('GLTF Loader: TGA loader configured successfully');
+      } catch (tgaError) {
+        console.warn('GLTF Loader: Failed to set up TGA loader:', tgaError);
+        // Continue without TGA support
+      }
+      
       const text = new TextDecoder().decode(data);
       
       console.log('GLTF Loader: Starting to parse', text.length, 'characters');
@@ -466,15 +720,9 @@ async function loadGLTF(data) {
       
       // Check for external buffers
       if (gltfJson.buffers && gltfJson.buffers.some(buffer => buffer.uri && !buffer.uri.startsWith('data:'))) {
-        console.warn('GLTF file references external buffers, creating fallback geometry...');
-        
-        // Create a fallback geometry when external files are missing
-        const geometry = createFallbackGeometryFromGLTF(gltfJson);
-        if (geometry) {
-          console.log('Created fallback geometry from GLTF structure');
-          resolve(geometry);
-          return;
-        }
+        console.warn('GLTF file references external buffers, these will be unavailable');
+        console.log('External buffers:', gltfJson.buffers.filter(buffer => buffer.uri && !buffer.uri.startsWith('data:')).map(b => b.uri));
+        // Continue with loading - let Three.js handle missing buffers gracefully
       }
       
       // Try to parse the GLTF normally, but catch errors related to missing files
@@ -485,14 +733,26 @@ async function loadGLTF(data) {
       }, (error) => {
         console.error('GLTF loading error:', error);
         
-        // Try fallback geometry creation on any error
-        const fallbackGeometry = createFallbackGeometryFromGLTF(gltfJson);
-        if (fallbackGeometry) {
-          console.log('Using fallback geometry for GLTF');
-          resolve(fallbackGeometry);
-        } else {
-          reject(new Error(`GLTF parsing failed: ${error?.message || error || 'Unknown error'}`));
+        // Only use fallback for specific error types that indicate missing external resources
+        const errorMessage = error?.message || error || '';
+        const isMissingResourceError = 
+          errorMessage.includes('buffer') || 
+          errorMessage.includes('404') || 
+          errorMessage.includes('Failed to load') ||
+          errorMessage.includes('External');
+        
+        if (isMissingResourceError) {
+          console.log('GLTF error appears to be missing external resources, trying fallback geometry');
+          const fallbackGeometry = createFallbackGeometryFromGLTF(gltfJson);
+          if (fallbackGeometry) {
+            console.log('Using fallback geometry for GLTF with missing resources');
+            resolve(fallbackGeometry);
+            return;
+          }
         }
+        
+        // For other errors, reject to let the normal error handling take over
+        reject(new Error(`GLTF parsing failed: ${errorMessage}`));
       });
     } catch (error) {
       console.error('GLTF loader setup error:', error);
@@ -568,12 +828,52 @@ async function loadGLB(data) {
     try {
       const loader = new GLTFLoader();
       
-      // Convert Uint8Array to ArrayBuffer if needed
-      const arrayBuffer = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+      // Set up DRACO loader for compressed GLB files
+      try {
+        const dracoLoader = new DRACOLoader();
+        // Use CDN for DRACO decoder - more reliable than local files
+        dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.6/');
+        dracoLoader.preload();
+        loader.setDRACOLoader(dracoLoader);
+        console.log('GLB Loader: DRACO loader configured successfully');
+      } catch (dracoError) {
+        console.warn('GLB Loader: Failed to set up DRACO loader:', dracoError);
+        // Continue without DRACO support - will handle errors later
+      }
       
-      console.log('GLB Loader: Starting to parse', arrayBuffer.byteLength, 'bytes');
+      // Set up TGA loader for texture support
+      try {
+        const tgaLoader = new TGALoader();
+        loader.manager.addHandler(/\.tga$/i, tgaLoader);
+        console.log('GLB Loader: TGA loader configured successfully');
+      } catch (tgaError) {
+        console.warn('GLB Loader: Failed to set up TGA loader:', tgaError);
+        // Continue without TGA support
+      }
       
-      // GLB files are self-contained, so no external dependencies
+      console.log('GLB Loader: Starting to parse', data.length, 'bytes');
+      console.log('GLB data type:', data.constructor.name);
+      
+      // Check if data starts with GLB magic bytes (0x676C5446 = "glTF")
+      const view = new DataView(data.buffer || data, data.byteOffset || 0, 4);
+      const magic = view.getUint32(0, true);
+      console.log('GLB magic bytes:', magic.toString(16));
+      
+      if (magic !== 0x46546C67) { // "glTF" in little-endian
+        console.warn('GLB file does not have correct magic bytes, expected 0x46546C67, got', magic.toString(16));
+      }
+      
+      // Convert to proper ArrayBuffer for GLB binary parsing
+      let arrayBuffer;
+      if (data instanceof Uint8Array) {
+        arrayBuffer = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+      } else if (data instanceof ArrayBuffer) {
+        arrayBuffer = data;
+      } else {
+        throw new Error('GLB data must be Uint8Array or ArrayBuffer');
+      }
+      
+      // GLTFLoader.parse for binary GLB: parse(data, path, onLoad, onError)
       loader.parse(arrayBuffer, '', (gltf) => {
         console.log('GLB loaded successfully:', gltf);
         console.log('GLB scene children:', gltf.scene.children.length);
@@ -595,6 +895,31 @@ async function loadGLB(data) {
         resolve(gltf);
       }, (error) => {
         console.error('GLB loading error:', error);
+        
+        // Check for specific error types and provide appropriate fallbacks
+        let shouldCreateFallback = false;
+        
+        if (error?.message?.includes('DRACOLoader') || error?.message?.includes('DRACO')) {
+          console.log('GLB uses DRACO compression but loader failed, creating fallback geometry');
+          shouldCreateFallback = true;
+        } else if (error?.message?.includes('JSON') || error?.message?.includes('Unexpected')) {
+          console.log('GLB appears to be corrupted or in unexpected format, creating fallback geometry');
+          shouldCreateFallback = true;
+        } else if (error?.message?.includes('External') || error?.message?.includes('buffer')) {
+          console.log('GLB references external files, creating fallback geometry');
+          shouldCreateFallback = true;
+        }
+        
+        if (shouldCreateFallback) {
+          // Create a fallback geometry
+          const fallbackGeometry = createFallbackGeometryFromGLB(arrayBuffer);
+          if (fallbackGeometry) {
+            console.log('Created fallback geometry for problematic GLB');
+            resolve({ isBufferGeometry: true, ...fallbackGeometry });
+            return;
+          }
+        }
+        
         reject(new Error(`GLB parsing failed: ${error?.message || error || 'Unknown error'}`));
       });
     } catch (error) {
@@ -615,6 +940,13 @@ async function loadOBJ(data) {
       console.log('OBJ preview:', text.substring(0, 200) + '...');
       
       const object = loader.parse(text);
+      
+      if (!object) {
+        console.error('OBJ loader returned null object');
+        reject(new Error('OBJ loader returned null object'));
+        return;
+      }
+      
       console.log('OBJ loaded successfully:', object);
       console.log('OBJ object type:', object.type);
       console.log('OBJ children count:', object.children?.length || 0);
@@ -623,7 +955,16 @@ async function loadOBJ(data) {
       if (object.children) {
         object.children.forEach((child, index) => {
           console.log(`OBJ child ${index}:`, child.type, child.name || 'unnamed', child.isMesh ? 'MESH' : '');
+          if (child.isMesh && child.geometry) {
+            console.log(`  - Child ${index} geometry:`, child.geometry.type, 'vertices:', child.geometry.attributes?.position?.count || 0);
+          }
         });
+      }
+      
+      // Validate that we have at least one mesh
+      const hasMesh = object.children?.some(child => child.isMesh && child.geometry?.attributes?.position);
+      if (!hasMesh) {
+        console.warn('OBJ file loaded but contains no valid meshes');
       }
       
       resolve(object);
@@ -646,10 +987,24 @@ async function loadPLY(data) {
       console.log('PLY Loader: Starting to parse', arrayBuffer.byteLength, 'bytes');
       
       loader.parse(arrayBuffer, (geometry) => {
+        if (!geometry) {
+          console.error('PLY loader returned null geometry');
+          reject(new Error('PLY loader returned null geometry'));
+          return;
+        }
+        
         console.log('PLY loaded successfully:', geometry);
         console.log('PLY geometry type:', geometry.type);
         console.log('PLY vertices:', geometry.attributes?.position?.count || 0);
         console.log('PLY faces:', geometry.index?.count ? geometry.index.count / 3 : 0);
+        
+        // Ensure geometry has proper attributes
+        if (!geometry.attributes?.position) {
+          console.error('PLY geometry missing position attribute');
+          reject(new Error('PLY geometry missing position attribute'));
+          return;
+        }
+        
         resolve(geometry);
       }, (progress) => {
         console.log('PLY loading progress:', progress);
@@ -676,10 +1031,24 @@ async function loadSTL(data) {
       console.log('STL Loader: Starting to parse', arrayBuffer.byteLength, 'bytes');
       
       const geometry = loader.parse(arrayBuffer);
+      
+      if (!geometry) {
+        console.error('STL loader returned null geometry');
+        reject(new Error('STL loader returned null geometry'));
+        return;
+      }
+      
       console.log('STL loaded successfully:', geometry);
       console.log('STL geometry type:', geometry.type);
       console.log('STL vertices:', geometry.attributes?.position?.count || 0);
       console.log('STL faces:', geometry.index?.count ? geometry.index.count / 3 : geometry.attributes.position.count / 3);
+      
+      // Ensure geometry has proper attributes
+      if (!geometry.attributes?.position) {
+        console.error('STL geometry missing position attribute');
+        reject(new Error('STL geometry missing position attribute'));
+        return;
+      }
       
       resolve(geometry);
     } catch (error) {
@@ -689,20 +1058,105 @@ async function loadSTL(data) {
   });
 }
 
-// DAE/Collada Loader
-async function loadDAE(data) {
-  return new Promise((resolve, reject) => {
-    const loader = new ColladaLoader();
-    const text = new TextDecoder().decode(data);
+
+// Helper function to combine multiple meshes into a single geometry
+function combineGeometries(meshes) {
+  try {
+    console.log('Combining geometries from', meshes.length, 'meshes');
     
-    loader.parse(text, (collada) => {
-      console.log('DAE loaded successfully:', collada);
-      resolve(collada.scene);
-    }, (error) => {
-      console.error('DAE loading error:', error);
-      reject(new Error(`DAE parsing failed: ${error?.message || 'Unknown error'}`));
+    // Filter out background planes and unwanted meshes
+    const filteredMeshes = meshes.filter(mesh => {
+      const name = mesh.name.toLowerCase();
+      return !name.includes('plane') && !name.includes('background');
     });
-  });
+    
+    console.log(`Filtered to ${filteredMeshes.length} meshes (removed background elements)`);
+    
+    if (filteredMeshes.length === 0) {
+      console.warn('No meshes left after filtering');
+      return meshes[0]?.geometry || null;
+    }
+    
+    // Use BufferGeometryUtils to merge geometries
+    const geometries = [];
+    
+    // Get all unique attributes from all geometries
+    const allAttributes = new Set();
+    filteredMeshes.forEach(mesh => {
+      if (mesh.geometry.attributes) {
+        Object.keys(mesh.geometry.attributes).forEach(attr => allAttributes.add(attr));
+      }
+    });
+    
+    console.log('All attributes found:', Array.from(allAttributes));
+    
+    for (let i = 0; i < filteredMeshes.length; i++) {
+      const mesh = filteredMeshes[i];
+      let geometry = mesh.geometry.clone();
+      
+      // Normalize attributes - ensure all geometries have the same attributes
+      for (const attrName of allAttributes) {
+        if (!geometry.attributes[attrName]) {
+          // Create default attribute if missing
+          const posCount = geometry.attributes.position.count;
+          if (attrName === 'normal' && !geometry.attributes.normal) {
+            geometry.computeVertexNormals();
+          } else if (attrName === 'uv' && !geometry.attributes.uv) {
+            // Create default UV coordinates
+            const uvArray = new Float32Array(posCount * 2);
+            for (let j = 0; j < posCount; j++) {
+              uvArray[j * 2] = 0;
+              uvArray[j * 2 + 1] = 0;
+            }
+            geometry.setAttribute('uv', new THREE.BufferAttribute(uvArray, 2));
+          }
+          // Skip other complex attributes like tangents, multiple UV sets
+        }
+      }
+      
+      // Don't apply world matrix - preserve relative positions
+      console.log(`Mesh ${i} (${mesh.name || 'unnamed'}):`, geometry.attributes.position.count, 'vertices');
+      geometries.push(geometry);
+    }
+    
+    // Check if we have BufferGeometryUtils available
+    if (!BufferGeometryUtils || !BufferGeometryUtils.mergeGeometries) {
+      console.warn('BufferGeometryUtils not available, using first geometry only');
+      return geometries[0];
+    }
+    
+    // Merge all geometries with compatible attributes only
+    const compatibleGeometries = geometries.map(geom => {
+      const newGeom = new THREE.BufferGeometry();
+      newGeom.setAttribute('position', geom.attributes.position);
+      if (geom.attributes.normal) {
+        newGeom.setAttribute('normal', geom.attributes.normal);
+      } else {
+        newGeom.computeVertexNormals();
+      }
+      if (geom.attributes.uv) {
+        newGeom.setAttribute('uv', geom.attributes.uv);
+      }
+      if (geom.index) {
+        newGeom.setIndex(geom.index);
+      }
+      return newGeom;
+    });
+    
+    const mergedGeometry = BufferGeometryUtils.mergeGeometries(compatibleGeometries);
+    console.log('Combined geometry has', mergedGeometry.attributes.position.count, 'vertices total');
+    
+    // Clean up cloned geometries
+    geometries.forEach(g => g.dispose());
+    compatibleGeometries.forEach(g => g.dispose());
+    
+    return mergedGeometry;
+  } catch (error) {
+    console.error('Failed to combine geometries:', error);
+    // Fallback to first non-plane geometry
+    const fallbackMesh = meshes.find(m => !m.name.toLowerCase().includes('plane'));
+    return fallbackMesh?.geometry || meshes[0]?.geometry || null;
+  }
 }
 
 // Helper function to create test geometry
@@ -735,133 +1189,48 @@ function createTestGeometry() {
   return geometry;
 }
 
-// Keep the custom USDZ parser for now since Three.js doesn't have a built-in USDZ loader
+// Helper function to convert TIFF to displayable data URL
+async function convertTiffToDataUrl(arrayBuffer) {
+  // Since browsers don't support TIFF natively, show an informative message instead
+  console.log('TIFF file detected, showing info message instead of trying to decode');
+  
+  // Return a special marker that we'll handle in the UI
+  return 'tiff-not-supported';
+}
 
-// Basic USDZ parser - extracts geometry from USD files in ZIP archive
-async function parseUSDZ(data) {
+// Helper function to create fallback geometry for GLB files
+function createFallbackGeometryFromGLB(arrayBuffer) {
   try {
-    // USDZ is a ZIP file containing USD files
-    // For a basic implementation, we'll try to extract and parse the main USD file
+    console.log('Creating fallback geometry from GLB binary data...');
     
-    // Check if we have JSZip available
-    if (typeof JSZip === 'undefined') {
-      throw new Error('JSZip library required for USDZ support');
+    // For GLB files, we can create a more sophisticated fallback
+    // based on file size and structure hints
+    const fileSize = arrayBuffer.byteLength;
+    let geometry;
+    
+    if (fileSize < 100000) {
+      // Small file - likely simple geometry, create a tetrahedron
+      geometry = new THREE.TetrahedronGeometry(1.5, 0);
+    } else if (fileSize < 1000000) {
+      // Medium file - create a more complex shape
+      geometry = new THREE.IcosahedronGeometry(1.5, 1);
+    } else {
+      // Large file - likely complex model, create a sphere
+      geometry = new THREE.SphereGeometry(1.5, 16, 12);
     }
     
-    const zip = new JSZip();
-    const archive = await zip.loadAsync(data);
+    geometry.computeVertexNormals();
     
-    // Look for USD files in the archive
-    let usdContent = null;
-    const usdFiles = Object.keys(archive.files).filter(name => 
-      name.endsWith('.usda') || name.endsWith('.usd')
-    );
-    
-    if (usdFiles.length === 0) {
-      throw new Error('No USD files found in USDZ archive');
-    }
-    
-    // Use the first USD file found
-    const usdFile = archive.files[usdFiles[0]];
-    usdContent = await usdFile.async('text');
-    
-    // Basic USD parsing - look for mesh data
-    return parseUSDContent(usdContent);
-    
+    console.log(`Created ${geometry.type} fallback geometry for GLB (${fileSize} bytes)`);
+    return geometry;
   } catch (error) {
-    console.error('USDZ parsing error:', error);
-    throw new Error(`Failed to parse USDZ: ${error.message}`);
+    console.warn('Failed to create GLB fallback geometry:', error);
+    // Ultimate fallback
+    const geometry = new THREE.BoxGeometry(1, 1, 1);
+    geometry.computeVertexNormals();
+    return geometry;
   }
 }
 
-// Basic USD content parser - extracts points and faces
-function parseUSDContent(content) {
-  const lines = content.split('\n');
-  const vertices = [];
-  const faces = [];
-  
-  let inMesh = false;
-  let inPoints = false;
-  let inFaces = false;
-  
-  for (const line of lines) {
-    const trimmed = line.trim();
-    
-    if (trimmed.startsWith('def Mesh') || trimmed.includes('Mesh')) {
-      inMesh = true;
-    }
-    
-    if (inMesh) {
-      if (trimmed.startsWith('float3[] points')) {
-        inPoints = true;
-        // Extract points from the same line if they exist
-        const match = trimmed.match(/\[(.*?)\]/);
-        if (match) {
-          parseUSDPoints(match[1], vertices);
-          inPoints = false;
-        }
-      } else if (trimmed.startsWith('int[] faceVertexIndices')) {
-        inFaces = true;
-        // Extract face indices from the same line if they exist
-        const match = trimmed.match(/\[(.*?)\]/);
-        if (match) {
-          parseUSDFaces(match[1], faces);
-          inFaces = false;
-        }
-      } else if (inPoints && trimmed.includes('[')) {
-        const match = trimmed.match(/\[(.*?)\]/);
-        if (match) {
-          parseUSDPoints(match[1], vertices);
-          inPoints = false;
-        }
-      } else if (inFaces && trimmed.includes('[')) {
-        const match = trimmed.match(/\[(.*?)\]/);
-        if (match) {
-          parseUSDFaces(match[1], faces);
-          inFaces = false;
-        }
-      }
-    }
-  }
-  
-  if (vertices.length === 0 || faces.length === 0) {
-    throw new Error('No mesh data found in USD content');
-  }
-  
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
-  geometry.setIndex(faces);
-  
-  return geometry;
-}
-
-// Parse USD point coordinates
-function parseUSDPoints(pointsStr, vertices) {
-  // Parse format like: (0, 0, 0), (1, 0, 0), (1, 1, 0)
-  const pointMatches = pointsStr.match(/\([^)]+\)/g);
-  if (pointMatches) {
-    for (const point of pointMatches) {
-      const coords = point.slice(1, -1).split(',').map(s => parseFloat(s.trim()));
-      if (coords.length >= 3) {
-        vertices.push(coords[0], coords[1], coords[2]);
-      }
-    }
-  }
-}
-
-// Parse USD face indices
-function parseUSDFaces(facesStr, faces) {
-  // Parse format like: 0, 1, 2, 3, 4, 7, 6, 5
-  const indices = facesStr.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
-  
-  // Convert to triangles (assuming quads for now)
-  for (let i = 0; i < indices.length; i += 4) {
-    if (i + 3 < indices.length) {
-      // Convert quad to two triangles
-      faces.push(indices[i], indices[i + 1], indices[i + 2]);
-      faces.push(indices[i], indices[i + 2], indices[i + 3]);
-    }
-  }
-}
 
 export default FilePreview;

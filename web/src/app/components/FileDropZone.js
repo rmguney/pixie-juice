@@ -54,7 +54,7 @@ export default function FileDropZone({ selectedFiles, setSelectedFiles, onFileSe
     });
 
     if (supportedFiles.length === 0) {
-  alert('Please select valid files:\n• Images: PNG, JPEG, WebP, GIF, BMP, ICO, TIFF, SVG, TGA, ICO\n• 3D Models: OBJ, PLY, STL, GLTF, GLB, FBX\n\n(Advanced formats like HEIC, STL, FBX will be supported in future phases)');
+  alert('Please select valid files:\n• Images: PNG, JPEG, WebP, GIF, BMP, ICO, TIFF, SVG, TGA\n• 3D Models: OBJ, PLY, STL, GLTF, GLB, FBX');
       return;
     }
 

@@ -412,44 +412,84 @@ export default function ProcessingPanel({ files, wasm, onProcess, setIsProcessin
       <div className="p-6 space-y-5">
         {/* Quality Slider */}
         <div>
-          <div className="flex items-center justify-between mb-1.5">
+          <div className="flex items-center justify-between mb-3">
             <label htmlFor="quality" className="text-xs text-neutral-400">
               Quality
             </label>
-            <span className="text-xs font-mono text-white">{quality}%</span>
+            <div className="flex items-center space-x-2">
+              <span className="text-xs font-mono text-white bg-neutral-800 px-2 py-1 rounded">{quality}%</span>
+            </div>
           </div>
-                    <input
-            id="quality"
-            type="range"
-            min="10"
-            max="100"
-            value={quality}
-            onChange={(e) => setQuality(parseInt(e.target.value))}
-            className="w-full h-2 bg-neutral-800 rounded-lg appearance-none cursor-pointer"
-            style={{
-              background: `linear-gradient(to right, #ffffff 0%, #ffffff ${quality}%, #404040 ${quality}%, #404040 100%)`
-            }}
-          />
+          
+          <div className="relative">
+            <div className="absolute top-0 left-0 right-0 h-1 bg-neutral-700 rounded-full pointer-events-none"></div>
+            <div 
+              className="absolute top-0 left-0 h-1 bg-gradient-to-r from-red-500 via-yellow-500 to-green-500 rounded-full pointer-events-none transition-all duration-200"
+              style={{ width: `${((quality - 10) / (100 - 10)) * 100}%` }}
+            ></div>
+            <input
+              id="quality"
+              type="range"
+              min="10"
+              max="100"
+              value={quality}
+              onChange={(e) => setQuality(parseInt(e.target.value))}
+              className="quality-slider w-full h-1 bg-transparent appearance-none cursor-pointer relative z-10"
+            />
+          </div>
+          
+          <div className="flex justify-between text-xs text-neutral-600 mt-2 px-1">
+            <span>10%</span>
+            <span>50%</span>
+            <span>100%</span>
+          </div>
+          
           <style jsx>{`
-            input[type="range"]::-webkit-slider-thumb {
+            .quality-slider::-webkit-slider-thumb {
               appearance: none;
-              height: 16px;
-              width: 16px;
+              height: 14px;
+              width: 14px;
               border-radius: 50%;
               background: #ffffff;
-              border: 2px solid #404040;
+              border: 2px solid #525252;
               cursor: pointer;
+              box-shadow: 0 1px 3px rgba(0,0,0,0.4);
+              transition: all 0.15s ease;
+              margin-top: -20px;
             }
-            input[type="range"]::-moz-range-thumb {
-              width: 16px;
-              height: 16px;
+            .quality-slider::-webkit-slider-thumb:hover {
+              transform: scale(1.2);
+              border-color: #737373;
+              box-shadow: 0 2px 6px rgba(0,0,0,0.5);
+            }
+            .quality-slider::-webkit-slider-thumb:active {
+              transform: scale(1.3);
+              border-color: #a3a3a3;
+              box-shadow: 0 3px 8px rgba(0,0,0,0.6);
+            }
+            .quality-slider::-moz-range-thumb {
+              width: 14px;
+              height: 14px;
               border-radius: 50%;
               background: #ffffff;
-              border: 2px solid #404040;
+              border: 2px solid #525252;
               cursor: pointer;
+              box-shadow: 0 1px 3px rgba(0,0,0,0.4);
+              transition: all 0.15s ease;
+            }
+            .quality-slider::-moz-range-thumb:hover {
+              transform: scale(1.2);
+              border-color: #737373;
+              box-shadow: 0 2px 6px rgba(0,0,0,0.5);
+            }
+            .quality-slider::-moz-range-track {
+              background: transparent;
+              height: 1px;
+              border: none;
             }
           `}</style>
-          <div className="text-xs text-neutral-500 mt-1">
+          
+          <div className="text-xs text-neutral-500 mt-2">
             {quality <= 30 ? "Maximum compression (may affect quality)" : 
              quality <= 60 ? "High compression" : "Balanced compression"}
           </div>
