@@ -216,6 +216,13 @@ extern "C" {
                               channels: i32, sigma: f32);
     pub fn dither_floyd_steinberg(image: *mut u8, width: i32, height: i32, channels: i32,
                                   palette: *const Color32, palette_size: usize);
+    
+    // CRITICAL: Missing functions causing WASM runtime errors (FIXED)
+    pub fn apply_floyd_steinberg_dither(rgba_data: *mut u8, width: usize, height: usize, 
+                                       palette: *const Color32, palette_size: usize) -> bool;
+    pub fn apply_gaussian_blur(rgba_data: *mut u8, width: usize, height: usize, 
+                              channels: usize, sigma: f32);
+    
     pub fn free_quantized_image(img: *mut QuantizedImage);
     
     // From mesh_decimate.h - QEM mesh decimation

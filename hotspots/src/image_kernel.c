@@ -700,6 +700,22 @@ void apply_floyd_steinberg_dither(
     dither_floyd_steinberg(rgba_data, (int32_t)width, (int32_t)height, 4, palette, palette_size);
 }
 
+// Gaussian blur wrapper for WASM exports
+void apply_gaussian_blur(
+    uint8_t* rgba_data,
+    size_t width,
+    size_t height,
+    size_t channels,
+    float sigma
+) {
+    if (!rgba_data || width == 0 || height == 0 || channels == 0 || sigma <= 0.0f) {
+        return;
+    }
+    
+    // Call the internal SIMD-optimized blur function
+    gaussian_blur_simd(rgba_data, (int32_t)width, (int32_t)height, (int32_t)channels, sigma);
+}
+
 // TIFF LZW compression with SIMD string matching for optimal performance
 TIFFProcessResult* compress_tiff_lzw_simd(
     const uint8_t* rgba_data,

@@ -23,9 +23,7 @@ extern "C" {
     fn memset_simd(dest: *mut core::ffi::c_void, value: i32, size: usize);
     fn vector_dot_product_simd(a: *const f32, b: *const f32, count: usize) -> f32;
     fn matrix_multiply_simd(a: *const f32, b: *const f32, result: *mut f32, m: usize, n: usize, k: usize);
-    fn apply_floyd_steinberg_dither(rgba_data: *mut u8, width: usize, height: usize, 
-                                   palette: *const Color32, palette_size: usize) -> bool;
-    fn apply_gaussian_blur(rgba_data: *mut u8, width: usize, height: usize, channels: usize, sigma: f32);
+    // Functions now declared in build.rs bindings
     fn rgb_to_yuv(rgb_data: *const u8, yuv_data: *mut u8, pixel_count: usize);
     fn yuv_to_rgb(yuv_data: *const u8, rgb_data: *mut u8, pixel_count: usize);
     fn weld_vertices_spatial(vertices: *const f32, vertex_count: usize, 
