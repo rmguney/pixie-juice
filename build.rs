@@ -2,12 +2,10 @@ use std::env;
 use std::path::PathBuf;
 
 fn main() {
-    // Declare the custom cfg option
     println!("cargo::rustc-check-cfg=cfg(c_hotspots_available)");
     
     let target = env::var("TARGET").unwrap_or_default();
     
-    // WASM-only targeting - no native compilation support
     if !target.contains("wasm32") {
         println!("cargo:warning=WASM-only targeting: native compilation not supported");
         println!("cargo:warning=Use --target=wasm32-unknown-unknown for WASM builds");
@@ -15,33 +13,14 @@ fn main() {
         return;
     }
     
-    // Check if c_hotspots feature is enabled
-    let c_hotspots_enabled = std::env::var("CARGO_FEATURE_C_HOTSPOTS").is_ok();
-    
-    // Force disable C hotspots if explicitly requested
-    let force_disable = std::env::var("PIXIE_DISABLE_C_HOTSPOTS").is_ok();
-    
-    if force_disable {
-        println!("cargo:warning=C hotspots disabled by PIXIE_DISABLE_C_HOTSPOTS flag");
-        create_fallback_bindings();
-    } else if !c_hotspots_enabled {
-        println!("cargo:warning=C hotspots feature not enabled, using Rust-only implementation");
-        println!("cargo:warning=Enable with --features c_hotspots for performance improvements");
-        create_fallback_bindings();
-    } else {
-        // Compile C hotspots for WASM-only target with production implementations
-        println!("cargo:warning=Compiling C hotspots for WASM target");
-        match compile_c_hotspots() {
-            Ok(_) => {
-                println!("cargo:warning=C hotspots compiled successfully with WASM SIMD-128 support");
-                println!("cargo:rustc-cfg=c_hotspots_available");
-            }
-            Err(e) => {
-                println!("cargo:warning=C hotspots compilation failed: {}", e);
-                println!("cargo:warning=Falling back to pure Rust implementations");
-                println!("cargo:warning=Performance will be lower but all functionality will work");
-                create_fallback_bindings();
-            }
+    match compile_c_hotspots() {
+        Ok(_) => {
+            println!("cargo:rustc-cfg=c_hotspots_available");
+        },
+        Err(e) => {
+            println!("cargo:warning=Failed to compile C hotspots: {}", e);
+            println!("cargo:warning=Using pure Rust implementations as fallback");
+            create_fallback_bindings();
         }
     }
 }
@@ -59,7 +38,6 @@ fn compile_c_hotspots() -> Result<(), Box<dyn std::error::Error>> {
     
     let target = env::var("TARGET").unwrap_or_default();
     
-    // WASM-only compilation - no native support
     if !target.contains("wasm32") {
         return Err("WASM-only targeting: native compilation removed".into());
     }
@@ -71,7 +49,6 @@ fn compile_c_hotspots() -> Result<(), Box<dyn std::error::Error>> {
     let hotspots_src_dir = "hotspots/src";
     let hotspots_include_dir = "hotspots/include";
     
-    // Check if hotspots directories exist
     if !std::path::Path::new(hotspots_dir).exists() {
         return Err("Hotspots directory not found".into());
     }
@@ -82,17 +59,15 @@ fn compile_c_hotspots() -> Result<(), Box<dyn std::error::Error>> {
         return Err("Hotspots include directory not found".into());
     }
     
-    // C hotspots - all providing >15% performance improvement
     let c_files = [
-        "util.c",          // High-performance utility functions
-        "memory.c",        // WASM memory management with 100MB pool
-        "math_kernel.c",   // Optimized WASM SIMD math operations
-        "image_kernel.c",  // Advanced image processing (octree quantization, Floyd-Steinberg)
-        "compress.c",      // C LZ4 and Huffman compression
-        "mesh_decimate.c", // Advanced QEM mesh decimation algorithm
+        "util.c",
+        "memory.c",
+        "math_kernel.c",
+        "image_kernel.c",
+        "compress.c",
+        "mesh_decimate.c",
     ];
     
-    // Check if files exist
     for file in &c_files {
         let path = format!("{}/{}", hotspots_src_dir, file);
         if !std::path::Path::new(&path).exists() {
@@ -100,10 +75,8 @@ fn compile_c_hotspots() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     
-    // Compile C files for WASM target only
     let mut build = cc::Build::new();
     
-    // Add files
     for file in &c_files {
         build.file(format!("{}/{}", hotspots_src_dir, file));
     }
@@ -115,46 +88,39 @@ fn compile_c_hotspots() -> Result<(), Box<dyn std::error::Error>> {
         .debug(false)
         .warnings(false);
     
-    // Only set C11 standard for non-MSVC compilers (MSVC has different syntax)
     if !build.get_compiler().is_like_msvc() {
         build.std("c11");
     }
     
-    // WASM-only target specific compilation
     println!("cargo:warning=WASM-only target - configuring clang");
     
     build.compiler(&clang_path);
     build.flag("--target=wasm32-unknown-unknown");
-    build.flag("-O3");                    // Maximum optimization for performance
-    build.flag("-flto");                  // Link time optimization  
-    build.flag("-msimd128");              // Enable WASM SIMD
-    build.flag("-mbulk-memory");          // Enable bulk memory operations
-    build.flag("-mmutable-globals");      // Enable mutable globals
+    build.flag("-O3");
+    build.flag("-flto");
+    build.flag("-msimd128");
+    build.flag("-mbulk-memory");
+    build.flag("-mmutable-globals");
     build.flag("-fno-builtin");
     build.flag("-nostdlib");
     build.flag("-Wno-unused-parameter");
     build.flag("-Wno-unused-variable");
     build.define("__wasm32__", None);
     build.define("WASM_TARGET", None);
-    build.define("NDEBUG", None);         // Release mode
-    
-    // CRITICAL: WASM visibility control for performance isolation
-    build.flag("-fvisibility=hidden");   // Hide all symbols by default
-    build.flag("-fno-common");           // Prevent common symbol export
+    build.define("NDEBUG", None);
+
+    build.flag("-fvisibility=hidden");
+    build.flag("-fno-common");
     
     // CRITICAL: Export only essential WASM runtime functions, not C hotspot functions
     // This ensures all C hotspot calls go through Rust wrapper functions for safety
     println!("cargo:rustc-link-arg=--export=wasm_malloc");
     println!("cargo:rustc-link-arg=--export=wasm_free");
     println!("cargo:rustc-link-arg=--export=wasm_get_memory_usage");
-    
-    // CRITICAL: WASM optimization flags for performance targets compliance
-    println!("cargo:rustc-link-arg=--lto-O3"); // Link time optimization
-    println!("cargo:rustc-link-arg=--no-demangle"); // Smaller binary
-    println!("cargo:rustc-link-arg=--strip-debug"); // Remove debug info
-    
+    println!("cargo:rustc-link-arg=--lto-O3");
+    println!("cargo:rustc-link-arg=--no-demangle");
+    println!("cargo:rustc-link-arg=--strip-debug");
     println!("cargo:warning=Compiling C files: {:?}", c_files);
-    // Try to compile - wrap in error handling
     match build.try_compile("pixie_hotspots") {
         Ok(_) => {
             println!("cargo:warning=C hotspots compiled successfully for WASM!");
@@ -164,8 +130,6 @@ fn compile_c_hotspots() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     
-    // Create manual bindings instead of using bindgen for now
-    // This avoids the header include issues on Windows
     let out_path = PathBuf::from(env::var("OUT_DIR")?);
     std::fs::write(
         out_path.join("bindings.rs"),
@@ -217,12 +181,6 @@ extern "C" {
     pub fn dither_floyd_steinberg(image: *mut u8, width: i32, height: i32, channels: i32,
                                   palette: *const Color32, palette_size: usize);
     
-    // CRITICAL: Missing functions causing WASM runtime errors (FIXED)
-    pub fn apply_floyd_steinberg_dither(rgba_data: *mut u8, width: usize, height: usize, 
-                                       palette: *const Color32, palette_size: usize) -> bool;
-    pub fn apply_gaussian_blur(rgba_data: *mut u8, width: usize, height: usize, 
-                              channels: usize, sigma: f32);
-    
     pub fn free_quantized_image(img: *mut QuantizedImage);
     
     // From mesh_decimate.h - QEM mesh decimation
@@ -256,21 +214,18 @@ extern "C" {
     
     println!("cargo:warning=Manual FFI bindings created successfully!");
     
-    // Tell cargo to invalidate the built crate whenever C files change
     println!("cargo:rerun-if-changed=hotspots/");
     
     Ok(())
 }
 
 fn find_clang() -> Result<String, Box<dyn std::error::Error>> {
-    // First try the PATH
     if let Ok(output) = std::process::Command::new("clang").arg("--version").output() {
         if output.status.success() {
             return Ok("clang".to_string());
         }
     }
     
-    // On Windows, check common installation paths
     if cfg!(target_os = "windows") {
         let common_paths = [
             r"C:\Program Files\LLVM\bin\clang.exe",
@@ -287,7 +242,6 @@ fn find_clang() -> Result<String, Box<dyn std::error::Error>> {
         
         for path in &common_paths {
             if std::path::Path::new(path).exists() {
-                // Test that it actually works
                 if let Ok(output) = std::process::Command::new(path).arg("--version").output() {
                     if output.status.success() {
                         return Ok(path.to_string());

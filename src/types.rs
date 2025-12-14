@@ -1,5 +1,3 @@
-//! Core types and data structures
-
 extern crate alloc;
 use alloc::{vec::Vec, string::String, format};
 
@@ -7,65 +5,43 @@ use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 use core::fmt;
 
-/// Main result type for Pixie Juice operations
 pub type PixieResult<T> = Result<T, PixieError>;
 
-/// Legacy alias for backward compatibility
 pub type OptResult<T> = PixieResult<T>;
 
-/// Comprehensive error type for all Pixie Juice operations
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum PixieError {
-    /// Image processing errors
     InvalidImageFormat(String),
     ImageDecodingFailed(String),
     ImageEncodingFailed(String),
     UnsupportedImageFeature(String),
-    
-    /// Mesh processing errors
     InvalidMeshFormat(String),
     MeshLoadingFailed(String),
     MeshOptimizationFailed(String),
     GeometryValidationFailed(String),
-    
-    /// Compression errors
     CompressionFailed(String),
     DecompressionFailed(String),
     InvalidCompressionLevel(u8),
-    
-    /// Memory and I/O errors
     InsufficientMemory(String),
     BufferOverflow(String),
     InvalidBufferSize(usize),
     IoError(String),
-    
-    /// Configuration errors
     InvalidConfiguration(String),
     FeatureNotAvailable(String),
     FeatureNotEnabled(String),
     UnsupportedFormat(String),
-    
-    /// C hotspot errors
     CHotspotFailed(String),
     CHotspotUnavailable(String),
     CHotspotError(String),
-    
-    /// Threading errors
     ThreadingError(String),
-    
-    /// Generic processing error
     ProcessingError(String),
-    
-    /// Legacy error types for compatibility
-    InvalidInput(String),
+        InvalidInput(String),
     InvalidFormat(String),
     OptimizationFailed(String),
     Memory(String),
     FormatError(String),
     XmlError(String),
-    
-    /// WebAssembly errors
-    WebAssemblyError(String),
+        WebAssemblyError(String),
 }
 
 impl From<wasm_bindgen::JsValue> for PixieError {
@@ -112,10 +88,8 @@ impl fmt::Display for PixieError {
     }
 }
 
-// Legacy error type alias
 pub type OptError = PixieError;
 
-/// Configuration for image optimization operations
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[wasm_bindgen]
 pub struct ImageOptConfig {
@@ -136,7 +110,6 @@ pub struct ImageOptConfig {
 
 impl Default for ImageOptConfig {
     fn default() -> Self {
-        // Get global configuration for metadata preservation
         let global_config = crate::optimizers::get_global_config();
         
         Self {
@@ -158,12 +131,10 @@ impl Default for ImageOptConfig {
 }
 
 impl ImageOptConfig {
-    /// Create a new ImageOptConfig with current global settings applied
     pub fn with_global_settings() -> Self {
         Self::default()
     }
     
-    /// Create a new ImageOptConfig with custom quality but respecting global settings
     pub fn with_quality(quality: u8) -> Self {
         let mut config = Self::default();
         config.quality = quality.clamp(1, 100);
@@ -171,7 +142,6 @@ impl ImageOptConfig {
     }
 }
 
-/// Configuration for mesh optimization operations
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[wasm_bindgen]
 pub struct MeshOptConfig {
@@ -204,19 +174,14 @@ impl Default for MeshOptConfig {
     }
 }
 
-/// Mesh simplification algorithms
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[wasm_bindgen]
 pub enum SimplificationAlgorithm {
-    /// Quadric Error Metrics - highest quality
     QuadricErrorMetrics,
-    /// Edge collapse - good balance of speed and quality
     EdgeCollapse,
-    /// Vertex clustering - fastest but lower quality
     VertexClustering,
 }
 
-/// Color representation for C FFI compatibility
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[repr(C)]
 pub struct Color32 {
@@ -232,10 +197,8 @@ impl Default for Color32 {
     }
 }
 
-/// Legacy configuration type for backward compatibility
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OptConfig {
-    // Legacy flat structure for backward compatibility
     pub quality: Option<u8>,
     pub compression_level: Option<u8>,
     pub lossless: Option<bool>,
@@ -246,8 +209,6 @@ pub struct OptConfig {
     pub preserve_alpha: Option<bool>,
     pub max_width: Option<u32>,
     pub max_height: Option<u32>,
-    
-    // New structured configs
     pub image: ImageOptConfig,
     pub mesh: MeshOptConfig,
     pub enable_threading: bool,
@@ -275,7 +236,6 @@ impl Default for OptConfig {
     }
 }
 
-/// Processing statistics for performance monitoring
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProcessingStats {
     pub operations_count: u64,
@@ -316,7 +276,6 @@ impl ProcessingStats {
     }
 }
 
-/// Image information and metadata
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImageInfo {
     pub width: u32,
@@ -330,7 +289,6 @@ pub struct ImageInfo {
     pub file_size: Option<usize>,
 }
 
-/// Color space enumeration
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[wasm_bindgen]
 pub enum ColorSpace {
@@ -344,7 +302,6 @@ pub enum ColorSpace {
     LAB,
 }
 
-/// Mesh information and metadata
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MeshInfo {
     pub vertex_count: usize,
@@ -358,7 +315,6 @@ pub struct MeshInfo {
     pub file_size: Option<usize>,
 }
 
-/// 3D bounding box
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct BoundingBox {
     pub min: [f32; 3],
@@ -388,7 +344,6 @@ impl BoundingBox {
     }
 }
 
-/// Buffer management for zero-copy operations
 #[derive(Debug)]
 pub struct ZeroCopyBuffer {
     data: Vec<u8>,
@@ -476,7 +431,6 @@ impl Default for BoundingBox {
     }
 }
 
-// Legacy type aliases for backward compatibility
 pub type ImageOptimizer = ();
 pub type MeshOptimizer = ();
 pub type VideoOptimizer = ();

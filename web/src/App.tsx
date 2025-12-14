@@ -1,21 +1,19 @@
-'use client';
-
 import { useState, useEffect } from 'react';
 import { useWasm } from './hooks/useWasm';
 import FileDropZone from './components/FileDropZone';
 import ProcessingPanel from './components/ProcessingPanel';
 import ResultsPanel from './components/ResultsPanel';
 import FilePreview from './components/FilePreview';
+import type { ProcessedResult, PerformanceMetrics } from './types';
 
-export default function PixieJuice() {
+export default function App() {
   const wasmHook = useWasm();
-  const { loading, error, available } = wasmHook;
-  const [selectedFiles, setSelectedFiles] = useState([]);
-  const [processedResults, setProcessedResults] = useState([]);
+  const { loading, error } = wasmHook;
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [processedResults, setProcessedResults] = useState<ProcessedResult[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [selectedFile, setSelectedFile] = useState(null);
-  const [wasmVersion, setWasmVersion] = useState('');
-  const [performanceStats, setPerformanceStats] = useState(null);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [performanceStats, setPerformanceStats] = useState<PerformanceMetrics | null>(null);
 
   useEffect(() => {
     if (selectedFiles.length > 0 && !selectedFile) {
@@ -30,15 +28,6 @@ export default function PixieJuice() {
 
   useEffect(() => {
     if (wasmHook.available) {
-      if (wasmHook.version) {
-        try {
-          const version = wasmHook.version();
-          setWasmVersion(version);
-        } catch (e) {
-          console.warn('Failed to get WASM version:', e);
-        }
-      }
-      
       if (wasmHook.get_performance_metrics) {
         try {
           const stats = wasmHook.get_performance_metrics();
@@ -48,7 +37,7 @@ export default function PixieJuice() {
         }
       }
     }
-  }, [wasmHook.available]);
+  }, [wasmHook.available, wasmHook.get_performance_metrics]);
 
   if (loading) {
     return (
@@ -66,7 +55,7 @@ export default function PixieJuice() {
       <div className="min-h-screen bg-black flex items-center justify-center">
         <div className="text-center max-w-md mx-auto p-4">
           <h2 className="text-base font-medium text-white mb-2">Failed to Load</h2>
-          <p className="text-neutral-400 text-sm mb-4">{error.message}</p>
+          <p className="text-neutral-400 text-sm mb-4">{error}</p>
           <button 
             onClick={() => window.location.reload()} 
             className="px-4 py-2 border border-white text-white text-sm rounded hover:bg-white hover:text-black transition-colors"
@@ -80,7 +69,6 @@ export default function PixieJuice() {
 
   return (
     <div className="min-h-screen bg-black text-white">
-      {/* Header */}
       <header className="mb-6">
         <div className="max-w-6xl mx-auto px-4 py-4">
           <div className="flex items-center justify-between">
@@ -112,7 +100,6 @@ export default function PixieJuice() {
         ) : (
           <div className="flex justify-center">
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 md:gap-6 w-full">
-              {/* First: Files */}
               <div className="order-1 bg-black rounded-lg overflow-hidden">
                 <FileDropZone 
                   selectedFiles={selectedFiles}
@@ -121,7 +108,6 @@ export default function PixieJuice() {
                 />
               </div>
 
-              {/* Second: Preview */}
               <div className="order-2 h-[300px] md:h-[400px] lg:h-[calc(100vh-150px)] bg-black rounded-lg overflow-hidden">
                 <div className="p-4 border-b border-neutral-800">
                   <h3 className="text-sm font-normal text-white text-center">Preview</h3>
@@ -131,7 +117,6 @@ export default function PixieJuice() {
                 </div>
               </div>
 
-              {/* Third: Processing/Results */}
               <div className="order-3 md:order-3 lg:order-3">
                 {!isProcessing && !processedResults.length && (
                   <ProcessingPanel

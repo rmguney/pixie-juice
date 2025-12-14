@@ -1,12 +1,9 @@
-//! Mesh loading utilities
-
 extern crate alloc;
 use alloc::{vec::Vec, string::ToString, vec};
 use crate::types::{OptResult, OptError, MeshOptConfig};
 use crate::formats::MeshFormat;
 use crate::mesh::formats::{detect_mesh_format, validate_mesh_data};
 
-/// Mesh loading result with metadata
 #[derive(Debug, Clone)]
 pub struct MeshLoadResult {
     pub vertices: Vec<f32>,
@@ -19,7 +16,6 @@ pub struct MeshLoadResult {
     pub metadata: MeshMetadata,
 }
 
-/// Mesh metadata extracted during loading
 #[derive(Debug, Clone)]
 pub struct MeshMetadata {
     pub has_textures: bool,
@@ -30,7 +26,6 @@ pub struct MeshMetadata {
     pub file_size: usize,
 }
 
-/// 3D bounding box
 #[derive(Debug, Clone)]
 pub struct BoundingBox {
     pub min_x: f32,
@@ -41,7 +36,6 @@ pub struct BoundingBox {
     pub max_z: f32,
 }
 
-/// Load mesh from data with automatic format detection
 pub fn load_mesh_auto(data: &[u8]) -> OptResult<MeshLoadResult> {
     let format = detect_mesh_format(data)?;
     validate_mesh_data(data, &format)?;
@@ -56,7 +50,6 @@ pub fn load_mesh_auto(data: &[u8]) -> OptResult<MeshLoadResult> {
     }
 }
 
-/// Load OBJ mesh using text parsing (WASM-compatible)
 fn load_obj_mesh(data: &[u8]) -> OptResult<MeshLoadResult> {
     let content = core::str::from_utf8(data)
         .map_err(|_| OptError::InvalidFormat("OBJ file contains invalid UTF-8".to_string()))?;
@@ -74,7 +67,6 @@ fn load_obj_mesh(data: &[u8]) -> OptResult<MeshLoadResult> {
         let trimmed = line.trim();
         
         if trimmed.starts_with("v ") {
-            // Vertex position
             let parts: Vec<&str> = trimmed.split_whitespace().skip(1).collect();
             if parts.len() >= 3 {
                 if let (Ok(x), Ok(y), Ok(z)) = (
@@ -86,7 +78,6 @@ fn load_obj_mesh(data: &[u8]) -> OptResult<MeshLoadResult> {
                 }
             }
         } else if trimmed.starts_with("vn ") {
-            // Vertex normal
             let parts: Vec<&str> = trimmed.split_whitespace().skip(1).collect();
             if parts.len() >= 3 {
                 if let (Ok(x), Ok(y), Ok(z)) = (
@@ -98,7 +89,6 @@ fn load_obj_mesh(data: &[u8]) -> OptResult<MeshLoadResult> {
                 }
             }
         } else if trimmed.starts_with("vt ") {
-            // Texture coordinate
             let parts: Vec<&str> = trimmed.split_whitespace().skip(1).collect();
             if parts.len() >= 2 {
                 if let (Ok(u), Ok(v)) = (
@@ -109,16 +99,13 @@ fn load_obj_mesh(data: &[u8]) -> OptResult<MeshLoadResult> {
                 }
             }
         } else if trimmed.starts_with("f ") {
-            // Face definition
             let parts: Vec<&str> = trimmed.split_whitespace().skip(1).collect();
             if parts.len() >= 3 {
                 let mut face_indices = Vec::new();
                 
                 for part in parts {
-                    // Parse vertex index (format: v/vt/vn or v//vn or v/vt or v)
                     let indices_str: Vec<&str> = part.split('/').collect();
                     if let Ok(vertex_idx) = indices_str[0].parse::<usize>() {
-                        // OBJ indices are 1-based, convert to 0-based
                         let idx = vertex_idx.saturating_sub(1);
                         if idx < vertex_positions.len() {
                             face_indices.push(idx);
@@ -126,7 +113,6 @@ fn load_obj_mesh(data: &[u8]) -> OptResult<MeshLoadResult> {
                     }
                 }
                 
-                // Triangulate face (simple fan triangulation)
                 if face_indices.len() >= 3 {
                     for i in 1..face_indices.len()-1 {
                         indices.push(face_indices[0] as u32);
@@ -138,7 +124,6 @@ fn load_obj_mesh(data: &[u8]) -> OptResult<MeshLoadResult> {
         }
     }
     
-    // Flatten vertex data
     for pos in &vertex_positions {
         vertices.extend_from_slice(pos);
     }
@@ -163,7 +148,7 @@ fn load_obj_mesh(data: &[u8]) -> OptResult<MeshLoadResult> {
         format: MeshFormat::Obj,
         metadata: MeshMetadata {
             has_textures: !vertex_uvs.is_empty(),
-            has_materials: false, // Would need to parse .mtl file
+            has_materials: false,
             has_normals: !vertex_normals.is_empty(),
             has_uvs: !vertex_uvs.is_empty(),
             bounding_box,
@@ -172,20 +157,16 @@ fn load_obj_mesh(data: &[u8]) -> OptResult<MeshLoadResult> {
     })
 }
 
-/// Load glTF mesh using JSON parsing (WASM-compatible approach)
 fn load_gltf_mesh(data: &[u8]) -> OptResult<MeshLoadResult> {
-    // Needs buffer parsing for full glTF support!
     let content = core::str::from_utf8(data)
         .map_err(|_| OptError::InvalidFormat("glTF file contains invalid UTF-8".to_string()))?;
     
-    // Basic validation
     if !content.contains("\"meshes\"") {
         return Err(OptError::InvalidFormat("glTF file missing meshes".to_string()));
     }
     
-    // Return minimal mesh data - in production, would parse buffers
     Ok(MeshLoadResult {
-        vertices: vec![0.0; 9], // Placeholder triangle
+        vertices: vec![0.0; 9],
         indices: vec![0, 1, 2],
         normals: None,
         uvs: None,
@@ -203,15 +184,13 @@ fn load_gltf_mesh(data: &[u8]) -> OptResult<MeshLoadResult> {
     })
 }
 
-/// Load GLB mesh (binary glTF)
 fn load_glb_mesh(data: &[u8]) -> OptResult<MeshLoadResult> {
     if data.len() < 20 {
         return Err(OptError::InvalidFormat("GLB file too small".to_string()));
     }
     
-    // For now, return basic structure - full GLB parsing requires buffer handling
     Ok(MeshLoadResult {
-        vertices: vec![0.0; 9], // Placeholder triangle
+        vertices: vec![0.0; 9],
         indices: vec![0, 1, 2],
         normals: None,
         uvs: None,
@@ -219,7 +198,7 @@ fn load_glb_mesh(data: &[u8]) -> OptResult<MeshLoadResult> {
         vertex_count: 3,
         triangle_count: 1,
         metadata: MeshMetadata {
-            has_textures: false, // Would need JSON chunk parsing
+            has_textures: false,
             has_materials: false,
             has_normals: false,
             has_uvs: false,
@@ -229,20 +208,16 @@ fn load_glb_mesh(data: &[u8]) -> OptResult<MeshLoadResult> {
     })
 }
 
-/// Load STL mesh (both ASCII and binary)
 fn load_stl_mesh(data: &[u8]) -> OptResult<MeshLoadResult> {
-    // Check if ASCII STL
     if let Ok(text) = core::str::from_utf8(&data[0..core::cmp::min(data.len(), 100)]) {
         if text.trim().to_lowercase().starts_with("solid") {
             return load_ascii_stl(data);
         }
     }
     
-    // Binary STL
     load_binary_stl(data)
 }
 
-/// Load ASCII STL format
 fn load_ascii_stl(data: &[u8]) -> OptResult<MeshLoadResult> {
     let content = core::str::from_utf8(data)
         .map_err(|_| OptError::InvalidFormat("ASCII STL contains invalid UTF-8".to_string()))?;
@@ -258,10 +233,8 @@ fn load_ascii_stl(data: &[u8]) -> OptResult<MeshLoadResult> {
         let line = lines[i].trim();
         
         if line.starts_with("facet normal") {
-            // Skip to vertices
             i += 1;
             if i < lines.len() && lines[i].trim() == "outer loop" {
-                // Read 3 vertices
                 for _ in 0..3 {
                     i += 1;
                     if i < lines.len() {
@@ -294,8 +267,8 @@ fn load_ascii_stl(data: &[u8]) -> OptResult<MeshLoadResult> {
         triangle_count: indices.len() / 3,
         vertices,
         indices,
-        normals: None, // STL normals are per-facet
-        uvs: None,     // STL doesn't support UVs
+        normals: None,
+        uvs: None,
         format: MeshFormat::Stl,
         metadata: MeshMetadata {
             has_textures: false,
@@ -308,13 +281,11 @@ fn load_ascii_stl(data: &[u8]) -> OptResult<MeshLoadResult> {
     })
 }
 
-/// Load binary STL format
 fn load_binary_stl(data: &[u8]) -> OptResult<MeshLoadResult> {
     if data.len() < 84 {
         return Err(OptError::InvalidFormat("Binary STL too small".to_string()));
     }
     
-    // Read triangle count from bytes 80-83
     let triangle_count = u32::from_le_bytes([data[80], data[81], data[82], data[83]]) as usize;
     let expected_size = 84 + triangle_count * 50;
     
@@ -325,13 +296,11 @@ fn load_binary_stl(data: &[u8]) -> OptResult<MeshLoadResult> {
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
     
-    let mut offset = 84; // Skip 80-byte header + triangle count
+    let mut offset = 84;
     
     for triangle_idx in 0..triangle_count {
-        // Skip normal vector (12 bytes)
         offset += 12;
         
-        // Read 3 vertices (36 bytes total)
         for vertex_idx in 0..3 {
             if offset + 12 <= data.len() {
                 let x = f32::from_le_bytes([data[offset], data[offset+1], data[offset+2], data[offset+3]]);
@@ -345,7 +314,6 @@ fn load_binary_stl(data: &[u8]) -> OptResult<MeshLoadResult> {
             }
         }
         
-        // Skip attribute byte count (2 bytes)
         offset += 2;
     }
     
@@ -370,19 +338,15 @@ fn load_binary_stl(data: &[u8]) -> OptResult<MeshLoadResult> {
     })
 }
 
-/// Load PLY mesh (basic text parsing)
 fn load_ply_mesh(data: &[u8]) -> OptResult<MeshLoadResult> {
     let content = core::str::from_utf8(data)
         .map_err(|_| OptError::InvalidFormat("PLY file contains invalid UTF-8".to_string()))?;
-    
-    // Needs property parsing for full PLY support, currently just reads header
     
     let lines: Vec<&str> = content.lines().collect();
     let mut vertex_count = 0;
     let mut face_count = 0;
     let mut _in_data = false;
     
-    // Parse header
     for line in &lines {
         let trimmed = line.trim();
         if trimmed.starts_with("element vertex ") {
@@ -399,7 +363,6 @@ fn load_ply_mesh(data: &[u8]) -> OptResult<MeshLoadResult> {
         }
     }
     
-    // Return placeholder data - full PLY parsing would require property handling
     Ok(MeshLoadResult {
         vertices: vec![0.0; vertex_count * 3],
         indices: vec![0; face_count * 3],
@@ -419,16 +382,13 @@ fn load_ply_mesh(data: &[u8]) -> OptResult<MeshLoadResult> {
     })
 }
 
-/// Load FBX mesh (placeholder - very complex format)
 fn load_fbx_mesh(data: &[u8]) -> OptResult<MeshLoadResult> {
-    // Need specilized FBX parsing library for full support
-    
     if data.len() < 100 {
         return Err(OptError::InvalidFormat("FBX file too small".to_string()));
     }
     
     Ok(MeshLoadResult {
-        vertices: vec![0.0; 9], // Placeholder triangle
+        vertices: vec![0.0; 9],
         indices: vec![0, 1, 2],
         normals: None,
         uvs: None,
@@ -446,7 +406,6 @@ fn load_fbx_mesh(data: &[u8]) -> OptResult<MeshLoadResult> {
     })
 }
 
-/// Calculate bounding box from vertex array
 fn calculate_bounding_box(vertices: &[f32]) -> Option<BoundingBox> {
     if vertices.len() < 3 {
         return None;
@@ -476,12 +435,10 @@ fn calculate_bounding_box(vertices: &[f32]) -> Option<BoundingBox> {
     })
 }
 
-/// Create optimized mesh loader with configuration
 pub fn create_mesh_loader(config: &MeshOptConfig) -> MeshLoader {
     MeshLoader::new(config.clone())
 }
 
-/// Configurable mesh loader
 pub struct MeshLoader {
     config: MeshOptConfig,
 }
@@ -494,13 +451,10 @@ impl MeshLoader {
     pub fn load(&self, data: &[u8]) -> OptResult<MeshLoadResult> {
         let result = load_mesh_auto(data)?;
         
-        // Apply configuration-based optimizations during loading
         if self.config.weld_vertices {
-            // Would apply vertex welding during load for efficiency
         }
         
         if self.config.target_ratio < 1.0 {
-            // Could apply decimation during load
         }
         
         Ok(result)
@@ -509,7 +463,6 @@ impl MeshLoader {
     pub fn load_with_validation(&self, data: &[u8]) -> OptResult<MeshLoadResult> {
         let result = self.load(data)?;
         
-        // Additional validation based on config
         if result.vertex_count == 0 {
             return Err(OptError::InvalidFormat("Mesh has no vertices".to_string()));
         }

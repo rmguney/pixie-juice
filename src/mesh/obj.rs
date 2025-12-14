@@ -1,24 +1,17 @@
-//! OBJ format support
-
 extern crate alloc;
 use alloc::{vec::Vec, string::{String, ToString}, format};
 
 use crate::types::{MeshOptConfig, OptResult, OptError};
 use crate::optimizers::get_current_time_ms;
 
-/// Optimize OBJ format using WASM-compatible text parsing
 pub fn optimize_obj(data: &[u8], config: &MeshOptConfig) -> OptResult<Vec<u8>> {
-    // CRITICAL: tobj requires std::io which is not available in #![no_std]/WASM
-    // Use advanced text-based parsing with mesh optimization algorithms
     optimize_obj_advanced_text(data, config)
 }
 
-/// text-based OBJ optimization with mesh algorithms
 fn optimize_obj_advanced_text(data: &[u8], config: &MeshOptConfig) -> OptResult<Vec<u8>> {
     let content = core::str::from_utf8(data)
         .map_err(|_| OptError::InvalidFormat("Invalid UTF-8 in OBJ file".to_string()))?;
     
-    // Parse OBJ content manually for mesh optimization
     let mut vertices = Vec::new();
     let mut normals = Vec::new();
     let mut texcoords = Vec::new();
@@ -80,23 +73,20 @@ fn optimize_obj_advanced_text(data: &[u8], config: &MeshOptConfig) -> OptResult<
                 }
             },
             "f" => {
-                // Parse face indices (1-based to 0-based conversion)
                 let mut face_indices = Vec::new();
                 for i in 1..parts.len() {
                     if let Some(vertex_idx) = parts[i].split('/').next() {
                         if let Ok(idx) = vertex_idx.parse::<u32>() {
                             if idx > 0 {
-                                face_indices.push(idx - 1); // Convert to 0-based
+                                face_indices.push(idx - 1);
                             }
                         }
                     }
                 }
                 
-                // Triangulate if needed (convert quads to triangles)
                 if face_indices.len() == 3 {
                     faces.extend_from_slice(&face_indices);
                 } else if face_indices.len() == 4 {
-                    // Split quad into two triangles
                     faces.push(face_indices[0]);
                     faces.push(face_indices[1]);
                     faces.push(face_indices[2]);
@@ -110,41 +100,32 @@ fn optimize_obj_advanced_text(data: &[u8], config: &MeshOptConfig) -> OptResult<
         }
     }
     
-    // Apply mesh optimization algorithms with C hotspot acceleration
     let _start_time = get_current_time_ms();
     #[cfg(c_hotspots_available)]
     let data_size = vertices.len() * 4 + faces.len() * 4;
     
     let (optimized_vertices, optimized_indices) = if config.target_ratio < 1.0 && !faces.is_empty() {
-        // CRITICAL: Use C hotspot for large meshes when available
-        // Note: C hotspots are runtime-compiled and called via FFI, not direct function calls
         #[cfg(c_hotspots_available)]
         {
-            if data_size > 100_000 { // >100KB justifies C hotspot usage
-                // C hotspots will be used internally by the runtime system
-                // For now, proceed with Rust implementation as baseline
+            if data_size > 100_000 {
                 apply_simple_decimation(&vertices, &faces, config.target_ratio, config)?
             } else {
-                // Use Rust implementation for smaller meshes
                 apply_simple_decimation(&vertices, &faces, config.target_ratio, config)?
             }
         }
         
         #[cfg(not(c_hotspots_available))]
         {
-            // Use Rust implementation when C hotspots not available
             apply_simple_decimation(&vertices, &faces, config.target_ratio, config)?
         }
     } else {
         (vertices, faces)
     };
     
-    // Apply vertex welding with C hotspot acceleration if enabled
     let (final_vertices, final_indices) = if config.weld_vertices {
         #[cfg(c_hotspots_available)]
         {
-            if data_size > 50_000 { // >50KB justifies C hotspot for vertex welding
-                // C hotspots will be used internally by the runtime system
+            if data_size > 50_000 {
                 apply_vertex_welding(&optimized_vertices, &optimized_indices, config.vertex_tolerance)?
             } else {
                 apply_vertex_welding(&optimized_vertices, &optimized_indices, config.vertex_tolerance)?
@@ -153,19 +134,15 @@ fn optimize_obj_advanced_text(data: &[u8], config: &MeshOptConfig) -> OptResult<
         
         #[cfg(not(c_hotspots_available))]
         {
-            // Use Rust implementation when C hotspots not available  
             apply_vertex_welding(&optimized_vertices, &optimized_indices, config.vertex_tolerance)?
         }
     } else {
         (optimized_vertices, optimized_indices)
     };
     
-    // Generate optimized OBJ content
     generate_optimized_obj_content(&object_name, &final_vertices, &final_indices, &texcoords, config)
 }
 
-/// Apply simplified mesh decimation algorithm
-/// Preserves mesh quality while reducing triangle count
 fn apply_simple_decimation(
     vertices: &[f32], 
     indices: &[u32], 
@@ -175,7 +152,6 @@ fn apply_simple_decimation(
     let target_triangle_count = ((indices.len() / 3) as f32 * target_ratio) as usize;
     
     if config.preserve_topology {
-        // Conservative decimation that preserves mesh boundaries
         let mut new_indices = Vec::new();
         
         for chunk in indices.chunks(3) {
@@ -186,7 +162,6 @@ fn apply_simple_decimation(
         
         Ok((vertices.to_vec(), new_indices))
     } else {
-        // More aggressive decimation with vertex clustering
         let mut new_indices = Vec::new();
         let step = (indices.len() / 3).max(1) / target_triangle_count.max(1);
         
@@ -202,7 +177,6 @@ fn apply_simple_decimation(
     }
 }
 
-/// Apply vertex welding with spatial tolerance
 fn apply_vertex_welding(
     vertices: &[f32], 
     indices: &[u32], 
@@ -214,7 +188,6 @@ fn apply_vertex_welding(
     let mut new_vertices = Vec::new();
     let mut index_mapping = Vec::new();
     
-    // Spatial hash with tolerance for vertex welding
     let inv_tolerance = 1.0 / tolerance;
     
     for i in 0..vertices.len() / 3 {
@@ -222,7 +195,6 @@ fn apply_vertex_welding(
         let y = vertices[i * 3 + 1];
         let z = vertices[i * 3 + 2];
         
-        // Create spatial hash key
         let hash_x = (x * inv_tolerance) as i32;
         let hash_y = (y * inv_tolerance) as i32;
         let hash_z = (z * inv_tolerance) as i32;
@@ -241,7 +213,6 @@ fn apply_vertex_welding(
         }
     }
     
-    // Remap indices
     let mut new_indices = Vec::new();
     for &idx in indices.iter() {
         if (idx as usize) < index_mapping.len() {
@@ -252,7 +223,6 @@ fn apply_vertex_welding(
     Ok((new_vertices, new_indices))
 }
 
-/// Generate optimized OBJ file content
 fn generate_optimized_obj_content(
     object_name: &str,
     vertices: &[f32],
@@ -264,21 +234,18 @@ fn generate_optimized_obj_content(
     content.push_str("# Optimized by Pixie Juice\n");
     content.push_str(&format!("o {}\n", object_name));
     
-    // Write vertices
     for chunk in vertices.chunks(3) {
         if chunk.len() == 3 {
             content.push_str(&format!("v {} {} {}\n", chunk[0], chunk[1], chunk[2]));
         }
     }
     
-    // Write texture coordinates if available
     for chunk in texcoords.chunks(2) {
         if chunk.len() == 2 {
             content.push_str(&format!("vt {} {}\n", chunk[0], chunk[1]));
         }
     }
     
-    // Generate normals if required
     if config.generate_normals {
         let normals = generate_normals_simple(vertices, indices);
         for chunk in normals.chunks(3) {
@@ -288,7 +255,6 @@ fn generate_optimized_obj_content(
         }
     }
     
-    // Write faces with 1-based indexing
     for chunk in indices.chunks(3) {
         if chunk.len() == 3 {
             content.push_str(&format!("f {} {} {}\n", 
@@ -299,12 +265,10 @@ fn generate_optimized_obj_content(
     Ok(content.into_bytes())
 }
 
-/// Generate normals using cross product algorithm
 fn generate_normals_simple(vertices: &[f32], indices: &[u32]) -> Vec<f32> {
     let mut normals = Vec::with_capacity(vertices.len());
     normals.resize(vertices.len(), 0.0);
     
-    // Calculate face normals and accumulate to vertices
     for chunk in indices.chunks(3) {
         if chunk.len() == 3 {
             let i0 = chunk[0] as usize * 3;
@@ -312,23 +276,19 @@ fn generate_normals_simple(vertices: &[f32], indices: &[u32]) -> Vec<f32> {
             let i2 = chunk[2] as usize * 3;
             
             if i0 + 2 < vertices.len() && i1 + 2 < vertices.len() && i2 + 2 < vertices.len() {
-                // Get triangle vertices
                 let v0 = [vertices[i0], vertices[i0 + 1], vertices[i0 + 2]];
                 let v1 = [vertices[i1], vertices[i1 + 1], vertices[i1 + 2]];
                 let v2 = [vertices[i2], vertices[i2 + 1], vertices[i2 + 2]];
                 
-                // Calculate edges
                 let edge1 = [v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2]];
                 let edge2 = [v2[0] - v0[0], v2[1] - v0[1], v2[2] - v0[2]];
                 
-                // Cross product for normal
                 let normal = [
                     edge1[1] * edge2[2] - edge1[2] * edge2[1],
                     edge1[2] * edge2[0] - edge1[0] * edge2[2],
                     edge1[0] * edge2[1] - edge1[1] * edge2[0],
                 ];
                 
-                // Accumulate to vertex normals
                 for &idx in chunk.iter() {
                     let ni = idx as usize * 3;
                     if ni + 2 < normals.len() {
@@ -341,7 +301,6 @@ fn generate_normals_simple(vertices: &[f32], indices: &[u32]) -> Vec<f32> {
         }
     }
     
-    // Normalize accumulated normals
     for chunk in normals.chunks_mut(3) {
         if chunk.len() == 3 {
             let length = (chunk[0] * chunk[0] + chunk[1] * chunk[1] + chunk[2] * chunk[2]).sqrt();
@@ -356,7 +315,6 @@ fn generate_normals_simple(vertices: &[f32], indices: &[u32]) -> Vec<f32> {
     normals
 }
 
-/// Check if data is a valid OBJ file
 pub fn is_obj(data: &[u8]) -> bool {
     if let Ok(content) = core::str::from_utf8(data) {
         let lines: Vec<&str> = content.lines().take(10).collect();
@@ -378,12 +336,8 @@ mod tests {
     #[test]
     fn test_obj_optimization() {
         let config = MeshOptConfig::default();
-        
-        // Test with empty data should fail gracefully
         let result = optimize_obj(&[], &config);
         assert!(result.is_err());
-        
-        // Test with minimal OBJ content
         let obj_content = b"# Simple OBJ file\nv 0.0 0.0 0.0\nv 1.0 0.0 0.0\nv 0.0 1.0 0.0\nf 1 2 3\n";
         let result = optimize_obj(obj_content, &config);
         assert!(result.is_ok());

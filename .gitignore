@@ -56,7 +56,6 @@ yarn-error.log*
 tests/fixtures/
 .benchmarks/
 tests/*.json
-*.html
 *.tmp
 *.temp
 *.gz
@@ -114,7 +113,6 @@ tests/fixtures/
 # Miscellaneous
 .benchmarks/
 tests/*.json
-*.html
 *.tmp
 *.temp
 *.gz

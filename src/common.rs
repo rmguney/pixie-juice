@@ -1,10 +1,7 @@
-//! Common types and utilities shared across format modules
-
 extern crate alloc;
 use alloc::string::String;
 use core::fmt;
 
-/// Error types for the pixel-squish library
 #[derive(Debug, Clone)]
 pub enum Error {
     Wasm(String),
@@ -28,21 +25,14 @@ impl fmt::Display for Error {
     }
 }
 
-/// Result type alias for the library
 pub type Result<T> = core::result::Result<T, Error>;
 
-/// Optimization options for all file types
 #[derive(Debug, Clone)]
 pub struct OptimizationOptions {
-    /// Quality level (0.0 to 1.0, where 1.0 is highest quality)
     pub quality: f32,
-    /// Target file size in KB (optional)
     pub target_size_kb: Option<u32>,
-    /// Whether to preserve metadata
     pub preserve_metadata: bool,
-    /// Progressive/interlaced encoding
     pub progressive: bool,
-    /// Custom optimization level (0-9, where 9 is most aggressive)
     pub optimization_level: u8,
 }
 
@@ -58,19 +48,16 @@ impl Default for OptimizationOptions {
     }
 }
 
-/// Result type used across all processing modules
 pub type ProcessingResult<T> = core::result::Result<T, Error>;
 
-/// Common metadata structure for file information
 #[derive(Debug, Clone)]
 pub struct FileMetadata {
     pub file_size: u64,
     pub format: String,
-    pub dimensions: Option<(u32, u32)>, // width, height for images/videos
-    pub duration: Option<f64>, // duration in seconds for videos
+    pub dimensions: Option<(u32, u32)>,
+    pub duration: Option<f64>,
 }
 
-/// Processing statistics for optimization results
 #[derive(Debug, Clone)]
 pub struct ProcessingStats {
     pub original_size: u64,

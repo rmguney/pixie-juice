@@ -1,17 +1,12 @@
-//! Mesh Decimation using Quadric Error Metrics
-
 #include "mesh_decimate.h"
 #include "util.h"
 
-// External WASM memory management
 extern void* wasm_malloc(size_t size);
 extern void wasm_free(void* ptr);
 
-// Optimized WASM math functions
 static inline float fast_sqrt(float x) {
     if (x <= 0.0f) return 0.0f;
     
-    // Newton's method optimized for WASM
     float guess = x * 0.5f;
     for (int i = 0; i < 6; i++) {
         guess = (guess + x / guess) * 0.5f;
@@ -23,7 +18,6 @@ static inline float fast_abs(float x) {
     return x < 0.0f ? -x : x;
 }
 
-// 4x4 Matrix operations for Quadric Error Metrics
 typedef struct {
     float m[4][4];
 } Matrix4;
@@ -58,7 +52,6 @@ static float matrix_evaluate_quadric(const Matrix4* mat, float x, float y, float
     return result;
 }
 
-// Vertex structure for QEM
 typedef struct {
     float pos[3];
     Matrix4 quadric;
@@ -68,14 +61,12 @@ typedef struct {
     size_t adjacent_capacity;
 } QEMVertex;
 
-// Edge structure for collapse operations
 typedef struct {
     size_t v1, v2;
     float cost;
     float target_pos[3];
 } QEMEdge;
 
-// Priority queue for edge collapse (simple heap)
 typedef struct {
     QEMEdge* edges;
     size_t count;
@@ -154,9 +145,7 @@ static int edge_queue_pop(EdgeQueue* queue, QEMEdge* edge) {
     return 1;
 }
 
-// Calculate plane equation for triangle
 static void calculate_plane(const float* v1, const float* v2, const float* v3, float plane[4]) {
-    // Calculate normal using cross product
     float edge1[3] = {v2[0] - v1[0], v2[1] - v1[1], v2[2] - v1[2]};
     float edge2[3] = {v3[0] - v1[0], v3[1] - v1[1], v3[2] - v1[2]};
     
@@ -166,7 +155,6 @@ static void calculate_plane(const float* v1, const float* v2, const float* v3, f
         edge1[0] * edge2[1] - edge1[1] * edge2[0]
     };
     
-    // Normalize
     float length = fast_sqrt(normal[0]*normal[0] + normal[1]*normal[1] + normal[2]*normal[2]);
     if (length > 1e-6f) {
         normal[0] /= length;
@@ -174,14 +162,12 @@ static void calculate_plane(const float* v1, const float* v2, const float* v3, f
         normal[2] /= length;
     }
     
-    // Calculate d coefficient
     plane[0] = normal[0];
     plane[1] = normal[1];
     plane[2] = normal[2];
     plane[3] = -(normal[0] * v1[0] + normal[1] * v1[1] + normal[2] * v1[2]);
 }
 
-// Create quadric matrix from plane equation
 static void create_quadric_from_plane(Matrix4* quadric, const float plane[4]) {
     matrix_zero(quadric);
     
@@ -192,31 +178,24 @@ static void create_quadric_from_plane(Matrix4* quadric, const float plane[4]) {
     }
 }
 
-// Calculate optimal collapse position for edge
 static float calculate_edge_collapse_cost(const QEMVertex* v1, const QEMVertex* v2, float target[3]) {
-    // Combine quadrics
     Matrix4 combined;
     matrix_add(&combined, &v1->quadric, &v2->quadric);
     
-    // For simplicity, use midpoint as target position
     target[0] = (v1->pos[0] + v2->pos[0]) * 0.5f;
     target[1] = (v1->pos[1] + v2->pos[1]) * 0.5f;
     target[2] = (v1->pos[2] + v2->pos[2]) * 0.5f;
     
-    // Evaluate quadric error at target position
     return matrix_evaluate_quadric(&combined, target[0], target[1], target[2]);
 }
 
-// Add adjacent vertex to vertex adjacency list
 static void add_adjacent_vertex(QEMVertex* vertex, size_t adjacent_index) {
-    // Check if already exists
     for (size_t i = 0; i < vertex->adjacent_count; i++) {
         if (vertex->adjacent_vertices[i] == adjacent_index) {
             return;
         }
     }
     
-    // Expand capacity if needed
     if (vertex->adjacent_count >= vertex->adjacent_capacity) {
         size_t new_capacity = vertex->adjacent_capacity * 2;
         if (new_capacity == 0) new_capacity = 8;
@@ -238,8 +217,7 @@ static void add_adjacent_vertex(QEMVertex* vertex, size_t adjacent_index) {
     vertex->adjacent_vertices[vertex->adjacent_count++] = adjacent_index;
 }
 
-// Main QEM decimation function
-MeshDecimateResult decimate_mesh_qem(const float* vertices, size_t vertex_count,
+WASM_EXPORT MeshDecimateResult decimate_mesh_qem(const float* vertices, size_t vertex_count,
                                     const uint32_t* indices, size_t index_count,
                                     float target_ratio) {
     MeshDecimateResult result = {0};
@@ -265,7 +243,6 @@ MeshDecimateResult decimate_mesh_qem(const float* vertices, size_t vertex_count,
     size_t target_vertex_count = (size_t)(vertex_count * target_ratio);
     if (target_vertex_count < 3) target_vertex_count = 3;
     
-    // Initialize QEM vertices
     QEMVertex* qem_vertices = (QEMVertex*)wasm_malloc(vertex_count * sizeof(QEMVertex));
     if (!qem_vertices) {
         result.success = 0;
@@ -287,7 +264,6 @@ MeshDecimateResult decimate_mesh_qem(const float* vertices, size_t vertex_count,
         matrix_zero(&qem_vertices[i].quadric);
     }
     
-    // Build adjacency information and initial quadrics
     size_t triangle_count = index_count / 3;
     for (size_t t = 0; t < triangle_count; t++) {
         uint32_t i1 = indices[t * 3];
@@ -298,7 +274,6 @@ MeshDecimateResult decimate_mesh_qem(const float* vertices, size_t vertex_count,
             continue;
         }
         
-        // Add adjacency relationships
         add_adjacent_vertex(&qem_vertices[i1], i2);
         add_adjacent_vertex(&qem_vertices[i1], i3);
         add_adjacent_vertex(&qem_vertices[i2], i1);
@@ -306,31 +281,26 @@ MeshDecimateResult decimate_mesh_qem(const float* vertices, size_t vertex_count,
         add_adjacent_vertex(&qem_vertices[i3], i1);
         add_adjacent_vertex(&qem_vertices[i3], i2);
         
-        // Calculate plane equation for triangle
         float plane[4];
         calculate_plane(qem_vertices[i1].pos, qem_vertices[i2].pos, qem_vertices[i3].pos, plane);
         
-        // Create quadric for this plane
         Matrix4 face_quadric;
         create_quadric_from_plane(&face_quadric, plane);
         
-        // Add to vertex quadrics
         matrix_add(&qem_vertices[i1].quadric, &qem_vertices[i1].quadric, &face_quadric);
         matrix_add(&qem_vertices[i2].quadric, &qem_vertices[i2].quadric, &face_quadric);
         matrix_add(&qem_vertices[i3].quadric, &qem_vertices[i3].quadric, &face_quadric);
     }
     
-    // Initialize edge queue
     EdgeQueue edge_queue;
-    edge_queue_init(&edge_queue, vertex_count * 6); // Estimate edge count
+    edge_queue_init(&edge_queue, vertex_count * 6);
     
-    // Add all edges to queue with collapse costs
     for (size_t i = 0; i < vertex_count; i++) {
         if (!qem_vertices[i].valid) continue;
         
         for (size_t j = 0; j < qem_vertices[i].adjacent_count; j++) {
             size_t adjacent = qem_vertices[i].adjacent_vertices[j];
-            if (adjacent > i && qem_vertices[adjacent].valid) { // Avoid duplicates
+            if (adjacent > i && qem_vertices[adjacent].valid) {
                 QEMEdge edge;
                 edge.v1 = i;
                 edge.v2 = adjacent;
@@ -340,30 +310,24 @@ MeshDecimateResult decimate_mesh_qem(const float* vertices, size_t vertex_count,
         }
     }
     
-    // Perform edge collapses
     size_t current_vertex_count = vertex_count;
     while (current_vertex_count > target_vertex_count && edge_queue.count > 0) {
         QEMEdge edge;
         if (!edge_queue_pop(&edge_queue, &edge)) break;
         
-        // Check if vertices are still valid
         if (!qem_vertices[edge.v1].valid || !qem_vertices[edge.v2].valid) {
             continue;
         }
         
-        // Collapse edge: merge v2 into v1
         qem_vertices[edge.v1].pos[0] = edge.target_pos[0];
         qem_vertices[edge.v1].pos[1] = edge.target_pos[1];
         qem_vertices[edge.v1].pos[2] = edge.target_pos[2];
         
-        // Combine quadrics
         matrix_add(&qem_vertices[edge.v1].quadric, &qem_vertices[edge.v1].quadric, &qem_vertices[edge.v2].quadric);
         
-        // Mark v2 as invalid
         qem_vertices[edge.v2].valid = 0;
         current_vertex_count--;
         
-        // Update adjacency for v1 (merge adjacency lists)
         for (size_t i = 0; i < qem_vertices[edge.v2].adjacent_count; i++) {
             size_t adjacent = qem_vertices[edge.v2].adjacent_vertices[i];
             if (adjacent != edge.v1 && qem_vertices[adjacent].valid) {
@@ -372,7 +336,6 @@ MeshDecimateResult decimate_mesh_qem(const float* vertices, size_t vertex_count,
         }
     }
     
-    // Build output mesh
     size_t* vertex_map = (size_t*)wasm_malloc(vertex_count * sizeof(size_t));
     float* new_vertices = (float*)wasm_malloc(current_vertex_count * 3 * sizeof(float));
     
@@ -381,7 +344,6 @@ MeshDecimateResult decimate_mesh_qem(const float* vertices, size_t vertex_count,
         wasm_free(new_vertices);
         edge_queue_free(&edge_queue);
         
-        // Free adjacency lists
         for (size_t i = 0; i < vertex_count; i++) {
             wasm_free(qem_vertices[i].adjacent_vertices);
         }
@@ -395,7 +357,6 @@ MeshDecimateResult decimate_mesh_qem(const float* vertices, size_t vertex_count,
         return result;
     }
     
-    // Create vertex mapping and copy valid vertices
     size_t new_vertex_index = 0;
     for (size_t i = 0; i < vertex_count; i++) {
         if (qem_vertices[i].valid) {
@@ -405,11 +366,10 @@ MeshDecimateResult decimate_mesh_qem(const float* vertices, size_t vertex_count,
             new_vertices[new_vertex_index * 3 + 2] = qem_vertices[i].pos[2];
             new_vertex_index++;
         } else {
-            vertex_map[i] = SIZE_MAX; // Invalid mapping
+            vertex_map[i] = SIZE_MAX;
         }
     }
     
-    // Count valid triangles and create index buffer
     size_t valid_triangle_count = 0;
     for (size_t t = 0; t < triangle_count; t++) {
         uint32_t i1 = indices[t * 3];
@@ -456,7 +416,6 @@ MeshDecimateResult decimate_mesh_qem(const float* vertices, size_t vertex_count,
         }
     }
     
-    // Cleanup
     wasm_free(vertex_map);
     edge_queue_free(&edge_queue);
     for (size_t i = 0; i < vertex_count; i++) {
@@ -464,7 +423,6 @@ MeshDecimateResult decimate_mesh_qem(const float* vertices, size_t vertex_count,
     }
     wasm_free(qem_vertices);
     
-    // Return successful result
     result.vertices = new_vertices;
     result.indices = new_indices;
     result.vertex_count = new_vertex_index;
@@ -474,8 +432,7 @@ MeshDecimateResult decimate_mesh_qem(const float* vertices, size_t vertex_count,
     return result;
 }
 
-// Free mesh decimation result
-void free_mesh_decimate_result(MeshDecimateResult* result) {
+WASM_EXPORT void free_mesh_decimate_result(MeshDecimateResult* result) {
     if (result && result->success) {
         wasm_free(result->vertices);
         wasm_free(result->indices);

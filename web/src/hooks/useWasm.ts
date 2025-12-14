@@ -1,12 +1,11 @@
-'use client';
-
 import { useState, useEffect } from 'react';
 import { initWasm, getWasm, isWasmReady } from '../utils/wasmLoader';
+import type { WasmModule, WasmHook } from '../types';
 
-export const useWasm = () => {
-  const [wasm, setWasm] = useState(null);
+export const useWasm = (): WasmHook => {
+  const [wasm, setWasm] = useState<WasmModule | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let isMounted = true;
@@ -16,38 +15,30 @@ export const useWasm = () => {
         setLoading(true);
         setError(null);
         
-        console.log('🔄 Initializing WASM module...');
-        
-        // Check if already initialized
         if (isWasmReady()) {
           const wasmModule = getWasm();
           if (isMounted) {
             setWasm(wasmModule);
             setLoading(false);
-            console.log('✅ WASM module ready (already initialized)');
           }
           return;
         }
         
-        // Initialize WASM with proper environment handling
         const wasmModule = await initWasm();
         
         if (isMounted) {
           setWasm(wasmModule);
           setLoading(false);
-          console.log('✅ WASM module loaded successfully');
           
-          // Make available globally for debugging
           if (typeof window !== 'undefined') {
-            window.pixieJuice = wasmModule;
-            console.log('🌐 WASM module available at window.pixieJuice');
+            (window as unknown as { pixieJuice: WasmModule }).pixieJuice = wasmModule;
           }
         }
         
       } catch (err) {
-        console.error('❌ WASM loading error:', err);
+        console.error('WASM loading error:', err);
         if (isMounted) {
-          setError(err.message);
+          setError(err instanceof Error ? err.message : String(err));
           setLoading(false);
         }
       }
@@ -60,27 +51,24 @@ export const useWasm = () => {
     };
   }, []);
 
-  // Return the WASM functions with loading state
   return {
-    // Basic optimization functions
     optimize_image: wasm?.optimize_image,
     optimize_mesh: wasm?.optimize_mesh,
     optimize_auto: wasm?.optimize_auto,
-    
-    // Format-specific optimization functions (Phase 1 - Available)
     optimize_png: wasm?.optimize_png,
     optimize_jpeg: wasm?.optimize_jpeg,
     optimize_webp: wasm?.optimize_webp,
     optimize_gif: wasm?.optimize_gif,
     optimize_ico: wasm?.optimize_ico,
-    
-    // Format detection functions (Phase 1 - Available)
+    optimize_obj: wasm?.optimize_obj,
+    optimize_stl: wasm?.optimize_stl,
+    optimize_fbx: wasm?.optimize_fbx,
+    optimize_gltf: wasm?.optimize_gltf,
+    optimize_ply: wasm?.optimize_ply,
     detect_format: wasm?.detect_format,
     is_webp: wasm?.is_webp,
     is_gif: wasm?.is_gif,
     is_ico: wasm?.is_ico,
-    
-    // Format conversion functions
     convert_to_webp: wasm?.convert_to_webp,
     convert_to_png: wasm?.convert_to_png,
     convert_to_jpeg: wasm?.convert_to_jpeg,
@@ -89,20 +77,14 @@ export const useWasm = () => {
     convert_to_ico: wasm?.convert_to_ico,
     convert_to_tiff: wasm?.convert_to_tiff,
     convert_to_svg: wasm?.convert_to_svg,
-    
-    // Performance monitoring
     get_performance_metrics: wasm?.get_performance_metrics,
     reset_performance_stats: wasm?.reset_performance_stats,
     check_performance_compliance: wasm?.check_performance_compliance,
-    
-    // Advanced configuration
     set_lossless_mode: wasm?.set_lossless_mode,
     set_preserve_metadata: wasm?.set_preserve_metadata,
-    
-    // Library info
     version: wasm?.version,
-    
-    // State
+    build_timestamp: wasm?.build_timestamp,
+    pixie_get_memory_target_mb: wasm?.pixie_get_memory_target_mb,
     loading,
     error,
     available: !!wasm && !loading && !error

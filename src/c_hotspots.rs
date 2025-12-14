@@ -1,5 +1,3 @@
-//! C Hotspots FFI Integration
-
 #![allow(dead_code, unused_variables)]
 
 extern crate alloc;
@@ -9,11 +7,9 @@ use alloc::{vec, vec::Vec, string::String, format};
 use alloc::string::ToString;
 use crate::types::{PixieResult, PixieError};
 
-// Include the generated bindings when C hotspots are enabled
 #[cfg(c_hotspots_available)]
 include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 
-// Missing function declarations for utility functions
 #[cfg(c_hotspots_available)]
 extern "C" {
     fn buffer_create(initial_capacity: usize) -> *mut core::ffi::c_void;
@@ -23,16 +19,12 @@ extern "C" {
     fn memset_simd(dest: *mut core::ffi::c_void, value: i32, size: usize);
     fn vector_dot_product_simd(a: *const f32, b: *const f32, count: usize) -> f32;
     fn matrix_multiply_simd(a: *const f32, b: *const f32, result: *mut f32, m: usize, n: usize, k: usize);
-    // Functions now declared in build.rs bindings
-    fn rgb_to_yuv(rgb_data: *const u8, yuv_data: *mut u8, pixel_count: usize);
-    fn yuv_to_rgb(yuv_data: *const u8, rgb_data: *mut u8, pixel_count: usize);
     fn weld_vertices_spatial(vertices: *const f32, vertex_count: usize, 
                             indices: *const u32, index_count: usize, 
                             tolerance: f32) -> MeshDecimateResult;
     fn svg_compress_text(data: *const u8, data_len: usize, 
                         compression_level: u32, 
                         output_size: *mut usize) -> *mut u8;
-    // Corrected signature to match C implementation in hotspots/src/util.c:
     // int svg_minify_markup_simd(const uint8_t* input, size_t input_size, uint8_t* output, size_t* output_size)
     fn svg_minify_markup_simd(input: *const u8, input_size: usize, output: *mut u8, output_size: *mut usize) -> i32;
     fn svg_optimize_paths(data: *const u8, data_len: usize, 
@@ -47,10 +39,9 @@ extern "C" {
                              compression_level: u32, 
                              output_size: *mut usize) -> *mut u8;
     
-    // TIFF C hotspot functions for performance-critical processing
     fn compress_tiff_lzw_simd(rgba_data: *const u8, width: usize, height: usize, 
                              quality: u8) -> *mut TIFFProcessResult;
-    fn strip_tiff_metadata_simd(tiff_data: *const u8, data_size: usize, 
+    fn strip_tiff_metadata_simd_c_hotspot(tiff_data: *const u8, data_size: usize, 
                                preserve_icc: bool) -> *mut TIFFProcessResult;
     fn apply_tiff_predictor_simd(rgba_data: *mut u8, width: usize, height: usize, 
                                 predictor_type: u8);
@@ -58,7 +49,6 @@ extern "C" {
                                     target_bits_per_channel: u8);
     fn free_tiff_result(result: *mut TIFFProcessResult);
     
-    // Advanced SIMD acceleration functions for performance optimization
     fn batch_process_pixels_simd(rgba_data: *mut u8, pixel_count: usize, operation_type: u8);
     fn parallel_color_conversion_simd(src_data: *const u8, dst_data: *mut u8, pixel_count: usize,
                                      src_format: u8, dst_format: u8);
@@ -72,7 +62,6 @@ extern "C" {
                                       quality: u8);
 }
 
-// Color32 definition when C hotspots are not available  
 #[cfg(not(c_hotspots_available))]
 #[derive(Clone, Copy, Debug)]
 pub struct Color32 {
@@ -82,7 +71,6 @@ pub struct Color32 {
     pub a: u8,
 }
 
-// TIFFProcessResult for C hotspot TIFF processing
 #[repr(C)]
 #[derive(Debug)]
 pub struct TIFFProcessResult {
@@ -94,17 +82,14 @@ pub struct TIFFProcessResult {
     pub compression: u8,
 }
 
-// Utility functions for safe FFI with graceful fallback
 #[cfg(c_hotspots_available)]
 pub mod util {
     use super::*;
     
-    /// Create a buffer with initial capacity using C hotspot with graceful fallback
     pub fn create_buffer(initial_capacity: usize) -> *mut core::ffi::c_void {
         unsafe { 
             let result = buffer_create(initial_capacity);
             if result.is_null() {
-                // Graceful fallback: create Rust-based buffer
                 create_buffer_rust_fallback(initial_capacity)
             } else {
                 result
@@ -112,23 +97,19 @@ pub mod util {
         }
     }
     
-    /// Destroy a buffer created by create_buffer with graceful fallback
     pub fn destroy_buffer(buffer: *mut core::ffi::c_void) {
         if !buffer.is_null() {
             unsafe { 
-                // Try C function first, fallback is automatic via Rust cleanup
                 buffer_destroy(buffer);
             }
         }
     }
     
-    /// Append data to buffer with graceful fallback
     pub fn append_to_buffer(buffer: *mut core::ffi::c_void, data: &[u8]) -> Result<(), String> {
         let result = unsafe { buffer_append(buffer, data.as_ptr(), data.len()) };
         if result == 0 {
             Ok(())
         } else {
-            // Graceful fallback: try Rust buffer operation
             append_to_buffer_rust_fallback(buffer, data)
         }
     }
@@ -156,14 +137,12 @@ pub mod util {
 pub mod util {
     use alloc::{vec, vec::Vec, string::{String, ToString}};
     
-    /// Pure Rust buffer implementation when C hotspots not available
     pub fn create_buffer(initial_capacity: usize) -> *mut core::ffi::c_void {
         let buffer = vec![0u8; initial_capacity];
         let boxed = alloc::boxed::Box::new(buffer);
         alloc::boxed::Box::into_raw(boxed) as *mut core::ffi::c_void
     }
     
-    /// Pure Rust buffer destruction
     pub fn destroy_buffer(buffer: *mut core::ffi::c_void) {
         if !buffer.is_null() {
             unsafe {
@@ -172,7 +151,6 @@ pub mod util {
         }
     }
     
-    /// Pure Rust buffer append
     pub fn append_to_buffer(buffer: *mut core::ffi::c_void, data: &[u8]) -> Result<(), String> {
         if buffer.is_null() {
             return Err("Null buffer".to_string());
@@ -186,16 +164,13 @@ pub mod util {
     }
 }
 
-// Memory operations with SIMD acceleration and graceful fallback
 #[cfg(c_hotspots_available)]
 pub mod memory {
     use super::*;
     
-    /// SIMD-optimized memory copy with graceful fallback
     pub fn simd_memcpy(dest: &mut [u8], src: &[u8]) {
         if dest.len() >= src.len() {
             unsafe {
-                // Try C SIMD implementation - if it fails, it should handle the error gracefully
                 memcpy_simd(
                     dest.as_mut_ptr() as *mut core::ffi::c_void,
                     src.as_ptr() as *const core::ffi::c_void,
@@ -203,16 +178,13 @@ pub mod memory {
                 );
             }
         } else {
-            // Fallback for size mismatch
             let copy_len = core::cmp::min(dest.len(), src.len());
             dest[..copy_len].copy_from_slice(&src[..copy_len]);
         }
     }
     
-    /// SIMD-optimized memory set with graceful fallback
     pub fn simd_memset(dest: &mut [u8], value: u8) {
         unsafe {
-            // Try C SIMD implementation - if it fails, it should handle the error gracefully
             memset_simd(
                 dest.as_mut_ptr() as *mut core::ffi::c_void,
                 value as i32,
@@ -225,7 +197,6 @@ pub mod memory {
 #[cfg(not(c_hotspots_available))]
 pub mod memory {
     
-    /// Pure Rust memory copy when C hotspots not available
     pub fn simd_memcpy(dest: &mut [u8], src: &[u8]) {
         if dest.len() >= src.len() {
             dest[..src.len()].copy_from_slice(src);
@@ -235,37 +206,30 @@ pub mod memory {
         }
     }
     
-    /// Pure Rust memory set when C hotspots not available
     pub fn simd_memset(dest: &mut [u8], value: u8) {
         dest.fill(value);
     }
 }
 
-// Math operations with SIMD acceleration and graceful fallback
 #[cfg(c_hotspots_available)]
 pub mod math {
     use super::*;
     
-    /// SIMD-optimized dot product with graceful fallback
     pub fn simd_dot_product(a: &[f32], b: &[f32]) -> f32 {
         if a.len() == b.len() && !a.is_empty() {
             unsafe { 
                 let result = vector_dot_product_simd(a.as_ptr(), b.as_ptr(), a.len());
-                // Check for NaN or invalid result and fallback if needed
                 if result.is_finite() {
                     result
                 } else {
-                    // Graceful fallback to Rust implementation
                     simd_dot_product_rust_fallback(a, b)
                 }
             }
         } else {
-            // Graceful fallback for size mismatch
             simd_dot_product_rust_fallback(a, b)
         }
     }
     
-    /// SIMD-optimized matrix multiplication with graceful fallback
     pub fn simd_matrix_multiply(a: &[f32], b: &[f32], m: i32, n: i32, k: i32) -> Vec<f32> {
         if m > 0 && n > 0 && k > 0 && a.len() >= (m * k) as usize && b.len() >= (k * n) as usize {
             let mut result = vec![0.0f32; (m * n) as usize];
@@ -273,28 +237,22 @@ pub mod math {
                 matrix_multiply_simd(a.as_ptr(), b.as_ptr(), result.as_mut_ptr(), m as usize, n as usize, k as usize);
             }
             
-            // Check if result is valid (no NaN values)
             if result.iter().all(|&x| x.is_finite()) {
                 result
             } else {
-                // Graceful fallback to Rust implementation
                 simd_matrix_multiply_rust_fallback(a, b, m, n, k)
             }
         } else {
-            // Graceful fallback for invalid dimensions
             simd_matrix_multiply_rust_fallback(a, b, m, n, k)
         }
     }
     
-    /// SIMD-optimized Gaussian blur with graceful fallback
     pub fn simd_gaussian_blur(image: &mut [u8], width: i32, height: i32, channels: i32, sigma: f32) {
         if width > 0 && height > 0 && channels > 0 && sigma > 0.0 {
             unsafe {
                 gaussian_blur_simd(image.as_mut_ptr(), width, height, channels, sigma);
             }
-            // Note: C function should handle validation internally, but we could add validation here
         }
-        // If parameters are invalid, do nothing (graceful degradation)
     }
     
     fn simd_dot_product_rust_fallback(a: &[f32], b: &[f32]) -> f32 {
@@ -330,7 +288,6 @@ pub mod math {
 pub mod math {
     use super::*;
     
-    /// Pure Rust dot product when C hotspots not available
     pub fn simd_dot_product(a: &[f32], b: &[f32]) -> f32 {
         let len = core::cmp::min(a.len(), b.len());
         let mut sum = 0.0f32;
@@ -340,7 +297,6 @@ pub mod math {
         sum
     }
     
-    /// Pure Rust matrix multiplication when C hotspots not available
     pub fn simd_matrix_multiply(a: &[f32], b: &[f32], m: i32, n: i32, k: i32) -> Vec<f32> {
         let mut result = vec![0.0f32; (m * n) as usize];
         
@@ -360,9 +316,7 @@ pub mod math {
         result
     }
     
-    /// Pure Rust Gaussian blur when C hotspots not available  
     pub fn simd_gaussian_blur(image: &mut [u8], width: i32, height: i32, channels: i32, sigma: f32) {
-        // Simple box blur approximation for fallback
         if width <= 0 || height <= 0 || channels <= 0 || sigma <= 0.0 {
             return;
         }
@@ -370,7 +324,6 @@ pub mod math {
         let radius = (sigma * 3.0) as usize;
         if radius == 0 { return; }
         
-        // Simple horizontal blur pass
         for y in 0..height as usize {
             for x in 0..width as usize {
                 for c in 0..channels as usize {
@@ -400,12 +353,10 @@ pub mod math {
     }
 }
 
-// Compression operations with LZ4 acceleration and graceful fallback
 #[cfg(c_hotspots_available)]
 pub mod compression {
     use super::*;
     
-    /// LZ4 compression using C hotspot with graceful fallback
     pub fn lz4_compress(input: &[u8]) -> Result<Vec<u8>, String> {
         // TEMPORARILY DISABLED: Always use Rust fallback to avoid compress_lz4 function errors
         // This disables only the problematic compress_lz4 function while keeping all other C hotspots
@@ -444,7 +395,6 @@ pub mod compression {
         */
     }
     
-    /// LZ4 decompression using C hotspot with graceful fallback
     pub fn lz4_decompress(input: &[u8], _output_size: usize) -> Result<Vec<u8>, String> {
         // TEMPORARILY DISABLED: Always use Rust fallback to avoid decompress_lz4 function errors
         // This disables only the problematic decompress_lz4 function while keeping all other C hotspots
@@ -466,30 +416,25 @@ pub mod compression {
 pub mod compression {
     use super::*;
     
-    /// Pure Rust LZ4 compression when C hotspots not available
     pub fn lz4_compress(input: &[u8]) -> Result<Vec<u8>, String> {
         use lz4_flex::compress_prepend_size;
         Ok(compress_prepend_size(input))
     }
     
-    /// Pure Rust LZ4 decompression when C hotspots not available
     pub fn lz4_decompress(input: &[u8], _output_size: usize) -> Result<Vec<u8>, String> {
         use lz4_flex::decompress_size_prepended;
         decompress_size_prepended(input).map_err(|e| format!("LZ4 decompression error: {:?}", e))
     }
 }
 
-/// C hotspot integration with graceful runtime fallback
 pub fn compress_data_c_hotspot(input: &[u8]) -> PixieResult<Vec<u8>> {
     // CRITICAL: For WASM, always use Rust implementation to avoid C function call errors
     #[cfg(target_arch = "wasm32")]
     {
-        // Always use Rust fallback in WASM environment to prevent runtime errors
         compress_data_rust_fallback(input)
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        // Try C hotspot first, fallback to Rust if it fails (non-WASM only)
         #[cfg(c_hotspots_available)]
         {
             match compression::lz4_compress(input) {
@@ -502,13 +447,11 @@ pub fn compress_data_c_hotspot(input: &[u8]) -> PixieResult<Vec<u8>> {
         }
         #[cfg(not(c_hotspots_available))]
         {
-            // Pure Rust fallback when C hotspots not available
             compress_data_rust_fallback(input)
         }
     }
 }
 
-/// Rust fallback using proven lz4_flex library
 fn compress_data_rust_fallback(input: &[u8]) -> PixieResult<Vec<u8>> {
     use lz4_flex::compress_prepend_size;
     
@@ -516,14 +459,11 @@ fn compress_data_rust_fallback(input: &[u8]) -> PixieResult<Vec<u8>> {
     Ok(compressed)
 }
 
-// Image processing hotspots with proper C FFI integration and CRITICAL performance tracking
 #[cfg(c_hotspots_available)]
 pub mod image {
     use super::*;
     use crate::{get_current_time_ms, update_performance_stats};
     
-    /// Octree color quantization with C hotspot and CRITICAL performance tracking
-    /// COMPLIANCE: >15% performance improvement documented through benchmarks
     pub fn octree_quantization(rgba_data: &[u8], width: usize, height: usize, max_colors: usize) -> PixieResult<(Vec<Color32>, Vec<u8>)> {
         let start_time = get_current_time_ms();
         let data_size = rgba_data.len();
@@ -540,47 +480,39 @@ pub mod image {
                 );
                 
                 let elapsed = get_current_time_ms() - start_time;
-                update_performance_stats(true, elapsed, data_size); // true = image operation
+                update_performance_stats(true, elapsed, data_size);
                 
                 if !result.is_null() {
                     let quantized = &*result;
                     
-                    // Copy palette
                     let palette_slice = core::slice::from_raw_parts(quantized.palette, quantized.palette_size);
                     let palette = palette_slice.to_vec();
                     
-                    // Copy indices
                     let indices_slice = core::slice::from_raw_parts(quantized.indices, width * height);
                     let indices = indices_slice.to_vec();
                     
-                    // Free C memory
                     free_quantized_image(result);
                     
                     return Ok((palette, indices));
                 }
             }
             
-            // If C hotspot failed, fall back to Rust implementation
             octree_quantization_rust_fallback(rgba_data, width, height, max_colors)
         }
         #[cfg(not(c_hotspots_available))]
         {
-            // Pure Rust implementation when C hotspots not available
             let elapsed = get_current_time_ms() - start_time;
-            update_performance_stats(true, elapsed, data_size); // true = image operation
+            update_performance_stats(true, elapsed, data_size);
             octree_quantization_rust_fallback(rgba_data, width, height, max_colors)
         }
     }
     
-    /// Median cut color quantization with C hotspot and CRITICAL performance tracking  
-    /// COMPLIANCE: >15% performance improvement documented through benchmarks
     pub fn median_cut_quantization(rgba_data: &[u8], width: usize, height: usize, max_colors: usize) -> PixieResult<(Vec<Color32>, Vec<u8>)> {
         let start_time = get_current_time_ms();
         let data_size = rgba_data.len();
         
         #[cfg(c_hotspots_available)]
         {
-            // Try C hotspot first
             unsafe {
                 let result = quantize_colors_median_cut(
                     rgba_data.as_ptr(),
@@ -592,49 +524,43 @@ pub mod image {
                 if !result.is_null() {
                     let quantized = &*result;
                     
-                    // Copy palette
                     let palette_slice = core::slice::from_raw_parts(quantized.palette, quantized.palette_size);
                     let palette = palette_slice.to_vec();
                     
-                    // Copy indices
                     let indices_slice = core::slice::from_raw_parts(quantized.indices, width * height);
                     let indices = indices_slice.to_vec();
                     
-                    // Free C memory
                     free_quantized_image(result);
                     
                     return Ok((palette, indices));
                 }
             }
             
-            // If C hotspot failed, fall back to Rust implementation  
             median_cut_quantization_rust_fallback(rgba_data, width, height, max_colors)
         }
         #[cfg(not(c_hotspots_available))]
         {
-            // Pure Rust implementation when C hotspots not available
             median_cut_quantization_rust_fallback(rgba_data, width, height, max_colors)
         }
     }
     
-    /// Floyd-Steinberg dithering with C hotspot and graceful fallback
     pub fn floyd_steinberg_dither(rgba_data: &mut [u8], width: usize, height: usize, palette: &[Color32]) {
         #[cfg(c_hotspots_available)]
         {
-            // Try C hotspot first - if it fails, fall back to Rust
-            let c_result = unsafe {
-                apply_floyd_steinberg_dither(
-                    rgba_data.as_mut_ptr(),
-                    width,
-                    height,
-                    palette.as_ptr(),
-                    palette.len()
-                );
-                true // Assume success for now, could check return value if C function provides one
-            };
-            
-            if !c_result {
+            if width == 0 || height == 0 || palette.is_empty() {
                 fallback::floyd_steinberg_rust(rgba_data, width, height, palette);
+                return;
+            }
+
+            unsafe {
+                dither_floyd_steinberg(
+                    rgba_data.as_mut_ptr(),
+                    width as i32,
+                    height as i32,
+                    4,
+                    palette.as_ptr(),
+                    palette.len(),
+                );
             }
         }
         #[cfg(not(c_hotspots_available))]
@@ -643,21 +569,18 @@ pub mod image {
         }
     }
     
-    /// Gaussian blur with C hotspot and graceful fallback
     pub fn gaussian_blur(rgba_data: &mut [u8], width: usize, height: usize, sigma: f32) {
         #[cfg(c_hotspots_available)]
         {
-            // Try C hotspot first
             unsafe {
-                apply_gaussian_blur(
+                gaussian_blur_simd(
                     rgba_data.as_mut_ptr(),
-                    width,
-                    height,
-                    4, // RGBA channels
-                    sigma
+                    width as i32,
+                    height as i32,
+                    4,
+                    sigma,
                 );
             }
-            // Note: C function should handle errors internally and gracefully degrade
         }
         #[cfg(not(c_hotspots_available))]
         {
@@ -665,55 +588,20 @@ pub mod image {
         }
     }
     
-    /// RGB to YUV color space conversion with C hotspot and graceful fallback
     pub fn rgb_to_yuv_simd(rgb_data: &[u8], yuv_data: &mut [u8]) {
-        #[cfg(c_hotspots_available)]
-        {
-            let pixel_count = rgb_data.len() / 3;
-            if pixel_count > 0 && yuv_data.len() >= rgb_data.len() {
-                unsafe {
-                    rgb_to_yuv(rgb_data.as_ptr(), yuv_data.as_mut_ptr(), pixel_count);
-                }
-            } else {
-                // Graceful fallback for invalid input
-                rgb_to_yuv_rust_fallback(rgb_data, yuv_data);
-            }
-        }
-        #[cfg(not(c_hotspots_available))]
-        {
-            rgb_to_yuv_rust_fallback(rgb_data, yuv_data);
-        }
+        rgb_to_yuv_rust_fallback(rgb_data, yuv_data);
     }
     
-    /// YUV to RGB color space conversion with C hotspot and graceful fallback
     pub fn yuv_to_rgb_simd(yuv_data: &[u8], rgb_data: &mut [u8]) {
-        #[cfg(c_hotspots_available)]
-        {
-            let pixel_count = yuv_data.len() / 3;
-            if pixel_count > 0 && rgb_data.len() >= yuv_data.len() {
-                unsafe {
-                    yuv_to_rgb(yuv_data.as_ptr(), rgb_data.as_mut_ptr(), pixel_count);
-                }
-            } else {
-                // Graceful fallback for invalid input
-                yuv_to_rgb_rust_fallback(yuv_data, rgb_data);
-            }
-        }
-        #[cfg(not(c_hotspots_available))]
-        {
-            yuv_to_rgb_rust_fallback(yuv_data, rgb_data);
-        }
+        yuv_to_rgb_rust_fallback(yuv_data, rgb_data);
     }
     
-    // Rust fallback implementations
     fn octree_quantization_rust_fallback(rgba_data: &[u8], width: usize, height: usize, max_colors: usize) -> PixieResult<(Vec<Color32>, Vec<u8>)> {
-        // Use color_quant library for quantization - proven and reliable
         #[cfg(feature = "color_quant")]
         {
             let mut quantizer = color_quant::NeuQuant::new(10, max_colors, rgba_data);
             let palette = quantizer.color_map_rgba();
             
-            // Convert palette to Color32
             let mut pixie_palette = Vec::new();
             for chunk in palette.chunks(4) {
                 if chunk.len() >= 4 {
@@ -726,7 +614,6 @@ pub mod image {
                 }
             }
             
-            // Generate indices
             let mut indices = Vec::with_capacity(width * height);
             for chunk in rgba_data.chunks(4) {
                 if chunk.len() >= 4 {
@@ -739,11 +626,9 @@ pub mod image {
         }
         #[cfg(not(feature = "color_quant"))]
         {
-            // Basic fallback quantization 
             let mut palette = Vec::new();
             let mut indices = Vec::new();
             
-            // Simple uniform quantization fallback
             let levels = ((max_colors as f32).powf(1.0/3.0) as usize).max(2);
             
             for r in 0..levels {
@@ -761,7 +646,6 @@ pub mod image {
                 }
             }
             
-            // Map pixels to palette
             for chunk in rgba_data.chunks(4) {
                 if chunk.len() >= 4 {
                     let index = find_closest_color_index(chunk[0], chunk[1], chunk[2], &palette);
@@ -774,18 +658,15 @@ pub mod image {
     }
     
     fn median_cut_quantization_rust_fallback(rgba_data: &[u8], width: usize, height: usize, max_colors: usize) -> PixieResult<(Vec<Color32>, Vec<u8>)> {
-        // For now, use the same quantization as octree - could be specialized later
         octree_quantization_rust_fallback(rgba_data, width, height, max_colors)
     }
     
     fn gaussian_blur_rust_fallback(rgba_data: &mut [u8], width: usize, height: usize, sigma: f32) {
-        // Simple box blur approximation for now
         if sigma <= 0.0 { return; }
         
         let radius = (sigma * 3.0) as usize;
         if radius == 0 { return; }
         
-        // Horizontal pass
         for y in 0..height {
             for x in 0..width {
                 let idx = (y * width + x) * 4;
@@ -827,7 +708,6 @@ pub mod image {
             let g = rgb_data[i * 3 + 1] as f32;
             let b = rgb_data[i * 3 + 2] as f32;
             
-            // ITU-R BT.601 standard coefficients
             let y = 0.299 * r + 0.587 * g + 0.114 * b;
             let u = -0.169 * r - 0.331 * g + 0.5 * b + 128.0;
             let v = 0.5 * r - 0.419 * g - 0.081 * b + 128.0;
@@ -847,7 +727,6 @@ pub mod image {
             let u = yuv_data[i * 3 + 1] as f32 - 128.0;
             let v = yuv_data[i * 3 + 2] as f32 - 128.0;
             
-            // ITU-R BT.601 standard conversion
             let r = y + 1.402 * v;
             let g = y - 0.344 * u - 0.714 * v;
             let b = y + 1.772 * u;
@@ -877,13 +756,10 @@ pub mod image {
         closest_index
     }
     
-    // Rust fallback implementations (for benchmarking and safety)
     pub mod fallback {
         use super::*;
         
-        /// Pure Rust Floyd-Steinberg dithering fallback
         pub fn floyd_steinberg_rust(rgba_data: &mut [u8], width: usize, height: usize, palette: &[Color32]) {
-            // Pure Rust implementation for comparison
             for y in 0..height {
                 for x in 0..width {
                     let idx = (y * width + x) * 4;
@@ -893,7 +769,6 @@ pub mod image {
                     let g = rgba_data[idx + 1] as i32;
                     let b = rgba_data[idx + 2] as i32;
                     
-                    // Find closest palette color (simplified)
                     let closest = find_closest_color(r as u8, g as u8, b as u8, palette);
                     
                     rgba_data[idx] = closest.r;
@@ -924,21 +799,18 @@ pub mod image {
     }
 }
 
-// Mesh processing hotspots
 #[cfg(c_hotspots_available)]
 pub mod mesh {
     use super::*;
     use crate::{get_current_time_ms, update_performance_stats};
     
-    /// Decimate mesh using Quadric Error Metrics in C with CRITICAL performance tracking
-    /// COMPLIANCE: >15% performance improvement documented through benchmarks
     pub fn decimate_mesh_qem_c(
         vertices: &[f32],
         indices: &[u32],
         target_ratio: f32
     ) -> PixieResult<(Vec<f32>, Vec<u32>)> {
         let start_time = get_current_time_ms();
-        let data_size = vertices.len() * 4 + indices.len() * 4; // Estimate data size in bytes
+        let data_size = vertices.len() * 4 + indices.len() * 4;
         
         let result = unsafe {
             decimate_mesh_qem(
@@ -967,7 +839,6 @@ pub mod mesh {
             return Err(PixieError::CHotspotFailed(format!("Mesh decimation failed: {}", error_msg)));
         }
         
-        // Extract the result data
         let new_vertices = unsafe {
             core::slice::from_raw_parts(result.vertices, result.vertex_count)
         }.to_vec();
@@ -976,7 +847,6 @@ pub mod mesh {
             core::slice::from_raw_parts(result.indices, result.index_count)
         }.to_vec();
         
-        // Free the C-allocated result
         unsafe {
             free_mesh_decimate_result(&result as *const _ as *mut _);
         }
@@ -984,15 +854,13 @@ pub mod mesh {
         Ok((new_vertices, new_indices))
     }
     
-    /// Weld vertices using spatial tolerance in C with CRITICAL performance tracking
-    /// COMPLIANCE: >15% performance improvement documented through benchmarks
     pub fn weld_vertices_c(
         vertices: &[f32],
         indices: &[u32],
         tolerance: f32
     ) -> PixieResult<(Vec<f32>, Vec<u32>)> {
         let start_time = get_current_time_ms();
-        let data_size = vertices.len() * 4 + indices.len() * 4; // Estimate data size in bytes
+        let data_size = vertices.len() * 4 + indices.len() * 4;
         
         let result = unsafe {
             weld_vertices_spatial(
@@ -1017,7 +885,6 @@ pub mod mesh {
             return Err(PixieError::CHotspotFailed(format!("Vertex welding failed: {}", error_msg)));
         }
         
-        // Extract the result data
         let new_vertices = unsafe {
             core::slice::from_raw_parts(result.vertices, result.vertex_count)
         }.to_vec();
@@ -1026,7 +893,6 @@ pub mod mesh {
             core::slice::from_raw_parts(result.indices, result.index_count)
         }.to_vec();
         
-        // Free the C-allocated result
         unsafe {
             free_mesh_decimate_result(&result as *const _ as *mut _);
         }
@@ -1035,13 +901,11 @@ pub mod mesh {
     }
 }
 
-// SVG optimization functions
-/// Compress SVG text using SIMD acceleration
 pub fn svg_text_compress(data: &[u8]) -> PixieResult<Vec<u8>> {
     #[cfg(c_hotspots_available)]
     {
-        let level = 6u32; // Default compression level
-        let mut output_data = vec![0u8; data.len()]; // SVG compression typically reduces size
+        let level = 6u32;
+        let mut output_data = vec![0u8; data.len()];
         let mut output_size = output_data.len();
         
         let result = unsafe {
@@ -1054,11 +918,9 @@ pub fn svg_text_compress(data: &[u8]) -> PixieResult<Vec<u8>> {
         };
         
         if !result.is_null() && output_size > 0 {
-            // Copy the result from C-allocated memory
             let result_data = unsafe { 
                 core::slice::from_raw_parts(result, output_size).to_vec()
             };
-            // Free the C-allocated memory (assuming we need to do this)
             unsafe {
                 // Note: We would need a free function from C, but for now assume it's handled
             }
@@ -1069,7 +931,6 @@ pub fn svg_text_compress(data: &[u8]) -> PixieResult<Vec<u8>> {
     }
     #[cfg(not(c_hotspots_available))]
     {
-        // Fallback: basic whitespace removal
         let text = core::str::from_utf8(data)
             .map_err(|e| PixieError::ImageDecodingFailed(format!("SVG UTF-8 error: {:?}", e)))?;
         let compressed = text.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -1077,11 +938,9 @@ pub fn svg_text_compress(data: &[u8]) -> PixieResult<Vec<u8>> {
     }
 }
 
-/// Minify SVG markup using SIMD acceleration
 pub fn svg_minify_markup(data: &[u8]) -> PixieResult<Vec<u8>> {
     #[cfg(c_hotspots_available)]
     {
-        // Allocate an output buffer the same size as input (minified output will be <= input)
         let mut output = vec![0u8; data.len()];
         let mut output_size = output.len();
         let status = unsafe {
@@ -1101,7 +960,6 @@ pub fn svg_minify_markup(data: &[u8]) -> PixieResult<Vec<u8>> {
     }
     #[cfg(not(c_hotspots_available))]
     {
-        // Fallback: remove comments and extra spaces
         let text = core::str::from_utf8(data)
             .map_err(|e| PixieError::ImageDecodingFailed(format!("SVG UTF-8 error: {:?}", e)))?;
         
@@ -1114,11 +972,11 @@ pub fn svg_minify_markup(data: &[u8]) -> PixieResult<Vec<u8>> {
             
             if !in_comment && ch == '<' && text[pos..].starts_with("<!--") {
                 in_comment = true;
-                pos += 4; // skip "<!--"
+                pos += 4;
                 continue;
             } else if in_comment && ch == '-' && text[pos..].starts_with("-->") {
                 in_comment = false;
-                pos += 3; // skip "-->"
+                pos += 3;
                 continue;
             }
             
@@ -1132,7 +990,6 @@ pub fn svg_minify_markup(data: &[u8]) -> PixieResult<Vec<u8>> {
     }
 }
 
-/// Optimize SVG path data using C acceleration
 pub fn svg_optimize_paths_c(data: &[u8]) -> PixieResult<Vec<u8>> {
     #[cfg(c_hotspots_available)]
     {
@@ -1143,13 +1000,12 @@ pub fn svg_optimize_paths_c(data: &[u8]) -> PixieResult<Vec<u8>> {
             svg_optimize_paths(
                 data.as_ptr(),
                 data.len(),
-                0.1, // precision for path optimization
+                0.1,
                 &mut output_size
             )
         };
         
         if !result.is_null() && output_size > 0 {
-            // Copy the result from C-allocated memory
             let result_data = unsafe { 
                 core::slice::from_raw_parts(result, output_size).to_vec()
             };
@@ -1160,17 +1016,14 @@ pub fn svg_optimize_paths_c(data: &[u8]) -> PixieResult<Vec<u8>> {
     }
     #[cfg(not(c_hotspots_available))]
     {
-        // Fallback: return original data since path optimization is complex
         Ok(data.to_vec())
     }
 }
 
-// ICO optimization functions
-/// Optimize ICO embedded images using C hotspots
 pub fn ico_optimize_embedded_c(data: &[u8], quality: u8) -> PixieResult<Vec<u8>> {
     #[cfg(c_hotspots_available)]
     {
-        let mut output_data = vec![0u8; data.len() * 2]; // Allow for expansion during optimization
+        let mut output_data = vec![0u8; data.len() * 2];
         let mut output_size = output_data.len();
         
         let result = unsafe {
@@ -1183,7 +1036,6 @@ pub fn ico_optimize_embedded_c(data: &[u8], quality: u8) -> PixieResult<Vec<u8>>
         };
         
         if !result.is_null() && output_size > 0 {
-            // Copy the result from C-allocated memory
             let result_data = unsafe { 
                 core::slice::from_raw_parts(result, output_size).to_vec()
             };
@@ -1194,12 +1046,10 @@ pub fn ico_optimize_embedded_c(data: &[u8], quality: u8) -> PixieResult<Vec<u8>>
     }
     #[cfg(not(c_hotspots_available))]
     {
-        // Fallback: return original data
         Ok(data.to_vec())
     }
 }
 
-/// Strip metadata from ICO using SIMD acceleration
 pub fn ico_strip_metadata_c(data: &[u8]) -> PixieResult<Vec<u8>> {
     #[cfg(c_hotspots_available)]
     {
@@ -1215,7 +1065,6 @@ pub fn ico_strip_metadata_c(data: &[u8]) -> PixieResult<Vec<u8>> {
         };
         
         if !result.is_null() && output_size > 0 {
-            // Copy the result from C-allocated memory
             let result_data = unsafe { 
                 core::slice::from_raw_parts(result, output_size).to_vec()
             };
@@ -1226,17 +1075,14 @@ pub fn ico_strip_metadata_c(data: &[u8]) -> PixieResult<Vec<u8>> {
     }
     #[cfg(not(c_hotspots_available))]
     {
-        // Fallback: basic ICO header preservation
         if data.len() < 6 {
             return Ok(data.to_vec());
         }
         
-        // Preserve ICO header structure and return minimal valid ICO
         Ok(data.to_vec())
     }
 }
 
-/// Compress ICO directory using C acceleration
 pub fn ico_compress_directory_c(data: &[u8]) -> PixieResult<Vec<u8>> {
     #[cfg(c_hotspots_available)]
     {
@@ -1247,13 +1093,12 @@ pub fn ico_compress_directory_c(data: &[u8]) -> PixieResult<Vec<u8>> {
             ico_compress_directory(
                 data.as_ptr(),
                 data.len(),
-                6, // compression level
+                6,
                 &mut output_size
             )
         };
         
         if !result.is_null() && output_size > 0 {
-            // Copy the result from C-allocated memory
             let result_data = unsafe { 
                 core::slice::from_raw_parts(result, output_size).to_vec()
             };
@@ -1264,12 +1109,10 @@ pub fn ico_compress_directory_c(data: &[u8]) -> PixieResult<Vec<u8>> {
     }
     #[cfg(not(c_hotspots_available))]
     {
-        // Fallback: return original data
         Ok(data.to_vec())
     }
 }
 
-/// TIFF LZW compression using C hotspot with SIMD acceleration
 pub fn compress_tiff_lzw_c_hotspot(rgba_data: &[u8], width: usize, height: usize, quality: u8) -> PixieResult<Vec<u8>> {
     
     #[cfg(c_hotspots_available)]
@@ -1294,10 +1137,8 @@ pub fn compress_tiff_lzw_c_hotspot(rgba_data: &[u8], width: usize, height: usize
                     core::slice::from_raw_parts(tiff_result.data, tiff_result.size).to_vec()
                 };
                 
-                // Clean up C-allocated memory
                 unsafe { free_tiff_result(result); }
                 
-                // Track performance
                 let elapsed = get_current_time_ms() - start_time;
                 update_performance_stats(true, elapsed, data_size);
                 
@@ -1312,12 +1153,10 @@ pub fn compress_tiff_lzw_c_hotspot(rgba_data: &[u8], width: usize, height: usize
     }
     #[cfg(not(c_hotspots_available))]
     {
-        // Fallback: simulate LZW compression with basic optimization
         tiff_lzw_rust_fallback(rgba_data, width, height, quality)
     }
 }
 
-/// TIFF metadata stripping using C hotspot with SIMD acceleration
 pub fn strip_tiff_metadata_c_hotspot(tiff_data: &[u8], preserve_icc: bool) -> PixieResult<Vec<u8>> {
     
     #[cfg(c_hotspots_available)]
@@ -1327,7 +1166,7 @@ pub fn strip_tiff_metadata_c_hotspot(tiff_data: &[u8], preserve_icc: bool) -> Pi
         let data_size = tiff_data.len();
         
         let result = unsafe {
-            strip_tiff_metadata_simd(
+            strip_tiff_metadata_simd_c_hotspot(
                 tiff_data.as_ptr(),
                 tiff_data.len(),
                 preserve_icc
@@ -1341,10 +1180,8 @@ pub fn strip_tiff_metadata_c_hotspot(tiff_data: &[u8], preserve_icc: bool) -> Pi
                     core::slice::from_raw_parts(tiff_result.data, tiff_result.size).to_vec()
                 };
                 
-                // Clean up C-allocated memory
                 unsafe { free_tiff_result(result); }
                 
-                // Track performance
                 let elapsed = get_current_time_ms() - start_time;
                 update_performance_stats(true, elapsed, data_size);
                 
@@ -1359,12 +1196,10 @@ pub fn strip_tiff_metadata_c_hotspot(tiff_data: &[u8], preserve_icc: bool) -> Pi
     }
     #[cfg(not(c_hotspots_available))]
     {
-        // Fallback: basic metadata removal simulation
         tiff_metadata_strip_rust_fallback(tiff_data, preserve_icc)
     }
 }
 
-/// Apply TIFF predictor preprocessing for better compression
 pub fn apply_tiff_predictor_c_hotspot(rgba_data: &mut [u8], width: usize, height: usize, predictor_type: u8) -> PixieResult<()> {
     #[cfg(c_hotspots_available)]
     {
@@ -1380,12 +1215,10 @@ pub fn apply_tiff_predictor_c_hotspot(rgba_data: &mut [u8], width: usize, height
     }
     #[cfg(not(c_hotspots_available))]
     {
-        // Fallback: basic predictor application
         tiff_predictor_rust_fallback(rgba_data, width, height, predictor_type)
     }
 }
 
-/// Optimize TIFF color space using C hotspot with SIMD acceleration
 pub fn optimize_tiff_colorspace_c_hotspot(rgba_data: &mut [u8], width: usize, height: usize, target_bits: u8) -> PixieResult<()> {
     #[cfg(c_hotspots_available)]
     {
@@ -1401,21 +1234,17 @@ pub fn optimize_tiff_colorspace_c_hotspot(rgba_data: &mut [u8], width: usize, he
     }
     #[cfg(not(c_hotspots_available))]
     {
-        // Fallback: basic color space optimization
         tiff_colorspace_rust_fallback(rgba_data, width, height, target_bits)
     }
 }
 
-// Rust fallback implementations for TIFF operations
 fn tiff_lzw_rust_fallback(rgba_data: &[u8], width: usize, height: usize, quality: u8) -> PixieResult<Vec<u8>> {
-    // Simulate LZW compression by applying basic RLE and size reduction
     let pixel_count = width * height;
     let mut compressed = Vec::with_capacity(pixel_count * 3);
     
     let compression_ratio = (100 - quality) as f32 / 100.0;
     let target_size = (rgba_data.len() as f32 * (1.0 - compression_ratio)) as usize;
     
-    // Simple compression simulation: downsample and remove alpha
     for i in (0..pixel_count).step_by(2) {
         if compressed.len() < target_size {
             let idx = i * 4;
@@ -1431,13 +1260,12 @@ fn tiff_lzw_rust_fallback(rgba_data: &[u8], width: usize, height: usize, quality
 }
 
 fn tiff_metadata_strip_rust_fallback(tiff_data: &[u8], _preserve_icc: bool) -> PixieResult<Vec<u8>> {
-    // Simulate metadata removal by reducing file size by 10-15%
     let reduced_size = tiff_data.len() * 85 / 100;
     Ok(tiff_data[..reduced_size.min(tiff_data.len())].to_vec())
 }
 
 fn tiff_predictor_rust_fallback(rgba_data: &mut [u8], width: usize, height: usize, predictor_type: u8) -> PixieResult<()> {
-    if predictor_type == 2 { // Horizontal predictor
+    if predictor_type == 2 {
         for y in 0..height {
             let row_start = y * width * 4;
             for x in (1..width).rev() {
@@ -1466,7 +1294,6 @@ fn tiff_colorspace_rust_fallback(rgba_data: &mut [u8], _width: usize, _height: u
     Ok(())
 }
 
-/// Advanced SIMD batch pixel processing for maximum performance
 pub fn batch_process_pixels_c_hotspot(rgba_data: &mut [u8], operation_type: u8) -> PixieResult<()> {
     #[cfg(c_hotspots_available)]
     {
@@ -1482,12 +1309,10 @@ pub fn batch_process_pixels_c_hotspot(rgba_data: &mut [u8], operation_type: u8) 
     }
     #[cfg(not(c_hotspots_available))]
     {
-        // Fallback: basic pixel processing
         advanced_pixel_processing_rust_fallback(rgba_data, operation_type)
     }
 }
 
-/// Parallel color conversion with SIMD acceleration
 pub fn parallel_color_conversion_c_hotspot(
     src_data: &[u8], 
     dst_data: &mut [u8], 
@@ -1510,12 +1335,10 @@ pub fn parallel_color_conversion_c_hotspot(
     }
     #[cfg(not(c_hotspots_available))]
     {
-        // Fallback: basic color conversion
         color_conversion_rust_fallback(src_data, dst_data, src_format, dst_format)
     }
 }
 
-/// Vectorized filter application with SIMD
 pub fn vectorized_filter_apply_c_hotspot(
     rgba_data: &mut [u8], 
     width: usize, 
@@ -1538,12 +1361,10 @@ pub fn vectorized_filter_apply_c_hotspot(
     }
     #[cfg(not(c_hotspots_available))]
     {
-        // Fallback: basic filter application
         filter_apply_rust_fallback(rgba_data, width, height, kernel)
     }
 }
 
-/// Fast downscaling with SIMD acceleration
 pub fn fast_downscale_c_hotspot(
     src_data: &[u8],
     dst_data: &mut [u8],
@@ -1568,12 +1389,10 @@ pub fn fast_downscale_c_hotspot(
     }
     #[cfg(not(c_hotspots_available))]
     {
-        // Fallback: basic downscaling
         downscale_rust_fallback(src_data, dst_data, src_width, src_height, dst_width, dst_height)
     }
 }
 
-/// Multi-threaded compression with SIMD acceleration
 pub fn multi_threaded_compression_c_hotspot(
     rgba_data: &[u8],
     width: usize,
@@ -1602,26 +1421,24 @@ pub fn multi_threaded_compression_c_hotspot(
     }
     #[cfg(not(c_hotspots_available))]
     {
-        // Fallback: basic compression
         compression_rust_fallback(rgba_data, width, height, quality)
     }
 }
 
-// Rust fallback implementations for advanced SIMD functions
 fn advanced_pixel_processing_rust_fallback(rgba_data: &mut [u8], operation_type: u8) -> PixieResult<()> {
     match operation_type {
-        1 => { // Brightness adjustment
+        1 => {
             for pixel in rgba_data.iter_mut() {
                 *pixel = (*pixel).saturating_add(25);
             }
         },
-        2 => { // Contrast adjustment
+        2 => {
             for pixel in rgba_data.iter_mut() {
                 let enhanced = (*pixel as f32 * 1.2).min(255.0) as u8;
                 *pixel = enhanced;
             }
         },
-        3 => { // Saturation adjustment
+        3 => {
             for chunk in rgba_data.chunks_mut(4) {
                 if chunk.len() == 4 {
                     let r = chunk[0] as f32;
@@ -1640,7 +1457,7 @@ fn advanced_pixel_processing_rust_fallback(rgba_data: &mut [u8], operation_type:
                 }
             }
         },
-        _ => {} // No operation
+        _ => {}
     }
     Ok(())
 }
@@ -1774,23 +1591,19 @@ fn compression_rust_fallback(
     Ok(compressed)
 }
 
-// Fallback implementations when C hotspots are not available
 #[cfg(not(c_hotspots_available))]
 pub mod fallback {
     use super::*;
     
-    /// Fallback: return input unchanged
     pub fn fallback_operation(input: &[u8]) -> PixieResult<Vec<u8>> {
         Ok(input.to_vec())
     }
 }
 
-/// Check if C hotspots are available
 pub fn are_c_hotspots_available() -> bool {
     cfg!(c_hotspots_available)
 }
 
-/// Get C hotspots feature info
 pub fn c_hotspots_info() -> &'static str {
     if cfg!(c_hotspots_available) {
         "C hotspots available - SIMD optimizations enabled"

@@ -1,5 +1,3 @@
-//! Mesh optimization algorithms
-
 extern crate alloc;
 use alloc::{vec::Vec, string::ToString};
 use crate::types::{PixieResult, PixieError, MeshOptConfig};
@@ -11,7 +9,6 @@ use crate::c_hotspots;
 pub struct MeshOptimizerCore;
 
 impl MeshOptimizerCore {
-    /// Mesh decimation using Quadric Error Metrics (QEM) algorithm
     pub fn decimate_mesh_qem(
         vertices: &[f32], 
         indices: &[u32], 
@@ -19,16 +16,11 @@ impl MeshOptimizerCore {
         config: &MeshOptConfig
     ) -> PixieResult<(Vec<f32>, Vec<u32>)> {
         let start_time = get_current_time_ms();
-        let data_size = vertices.len() * 4 + indices.len() * 4; // Size in bytes
+        let data_size = vertices.len() * 4 + indices.len() * 4;
         
-        // Apply C hotspot for mesh decimation if available and justified
-        // Note: C hotspots are runtime-compiled and called via FFI, not direct function calls
-        // For now, let the c_hotspots module handle its own internal calls
         #[cfg(c_hotspots_available)]
         {
-            if data_size > 200_000 { // >200KB justifies C hotspot usage
-                // C hotspots will be used internally by the runtime system
-                // For now, proceed with Rust implementation as baseline
+            if data_size > 200_000 {
             }
         }
         
@@ -50,13 +42,11 @@ impl MeshOptimizerCore {
         match result {
             Ok(decimated) => Ok(decimated),
             Err(e) => {
-                // Error tracking is handled by update_performance_stats in optimizers.rs
                 Err(e)
             }
         }
     }
 
-    /// Vertex welding with configurable tolerance
     pub fn weld_vertices(
         vertices: &[f32], 
         indices: &[u32], 
@@ -65,7 +55,6 @@ impl MeshOptimizerCore {
         let start_time = get_current_time_ms();
         let data_size = vertices.len() * 4 + indices.len() * 4;
         
-        // Use spatial hashing for efficient vertex welding
         let result = weld_vertices_spatial_hash(vertices, indices, tolerance);
         
         let elapsed = get_current_time_ms() - start_time;
@@ -74,7 +63,6 @@ impl MeshOptimizerCore {
         result
     }
 
-    /// Forsyth vertex cache optimization algorithm
     pub fn optimize_vertex_cache(
         vertices: &[f32], 
         indices: &[u32]
@@ -91,7 +79,6 @@ impl MeshOptimizerCore {
     }
 }
 
-/// C Hotspot integration for mesh decimation (manual FFI)
 #[cfg(c_hotspots_available)]
 fn apply_c_mesh_decimation(
     vertices: &[f32], 
@@ -100,7 +87,6 @@ fn apply_c_mesh_decimation(
 ) -> PixieResult<(Vec<f32>, Vec<u32>)> {
     use crate::c_hotspots::decimate_mesh_qem;
     
-    // safe FFI wrapper with error handling
     unsafe {
         let result = decimate_mesh_qem(
             vertices.as_ptr(),
@@ -128,7 +114,6 @@ fn apply_c_mesh_decimation(
     }
 }
 
-/// Quadric Error Metrics algorithm
 fn decimate_qem_rust(
     vertices: &[f32], 
     indices: &[u32], 
@@ -149,10 +134,7 @@ fn decimate_qem_rust(
     
     let target_triangle_count = ((indices.len() / 3) as f32 * target_ratio) as usize;
     
-    // Simplified QEM implementation for WASM compatibility
-    // Preserves topology when required
     if config.preserve_topology {
-        // Conservative decimation that preserves mesh boundaries
         let _decimation_step = if target_ratio > 0.5 { 2 } else { 3 };
         let mut new_indices = Vec::new();
         
@@ -164,7 +146,6 @@ fn decimate_qem_rust(
         
         Ok((vertices.to_vec(), new_indices))
     } else {
-        // Aggressive decimation - sample triangles
         let mut new_indices = Vec::new();
         let step = indices.len() / 3 / target_triangle_count.max(1);
         
@@ -180,14 +161,12 @@ fn decimate_qem_rust(
     }
 }
 
-/// Edge collapse decimation implementation
 fn decimate_edge_collapse_rust(
     vertices: &[f32], 
     indices: &[u32], 
     target_ratio: f32,
     _config: &MeshOptConfig
 ) -> PixieResult<(Vec<f32>, Vec<u32>)> {
-    // Simplified edge collapse for WASM
     let target_count = ((indices.len() / 3) as f32 * target_ratio) as usize * 3;
     let mut new_indices = indices.to_vec();
     new_indices.truncate(target_count);
@@ -195,14 +174,12 @@ fn decimate_edge_collapse_rust(
     Ok((vertices.to_vec(), new_indices))
 }
 
-/// Vertex clustering decimation implementation
 fn decimate_vertex_clustering_rust(
     vertices: &[f32], 
     indices: &[u32], 
     target_ratio: f32,
     _config: &MeshOptConfig
 ) -> PixieResult<(Vec<f32>, Vec<u32>)> {
-    // Simplified vertex clustering for WASM
     let target_count = ((indices.len() / 3) as f32 * target_ratio) as usize * 3;
     let mut new_indices = indices.to_vec();
     new_indices.truncate(target_count);
@@ -210,8 +187,6 @@ fn decimate_vertex_clustering_rust(
     Ok((vertices.to_vec(), new_indices))
 }
 
-/// Spatial hash-based vertex welding
-/// O(n) vertex deduplication
 fn weld_vertices_spatial_hash(
     vertices: &[f32], 
     indices: &[u32], 
@@ -223,7 +198,6 @@ fn weld_vertices_spatial_hash(
     let mut new_vertices = Vec::new();
     let mut new_indices = Vec::new();
     
-    // Spatial hash with tolerance
     let inv_tolerance = 1.0 / tolerance;
     
     for i in 0..vertices.len() / 3 {
@@ -231,14 +205,12 @@ fn weld_vertices_spatial_hash(
         let y = vertices[i * 3 + 1];
         let z = vertices[i * 3 + 2];
         
-        // Create hash key with tolerance
         let hash_x = (x * inv_tolerance) as i32;
         let hash_y = (y * inv_tolerance) as i32;
         let hash_z = (z * inv_tolerance) as i32;
         let hash_key = (hash_x, hash_y, hash_z);
         
         if let Some(&existing_index) = vertex_map.get(&hash_key) {
-            // Reuse existing vertex
             for &index in indices.iter() {
                 if index == i as u32 {
                     new_indices.push(existing_index);
@@ -247,7 +219,6 @@ fn weld_vertices_spatial_hash(
                 }
             }
         } else {
-            // Add new vertex
             let new_index = new_vertices.len() as u32 / 3;
             vertex_map.insert(hash_key, new_index);
             new_vertices.push(x);
@@ -259,13 +230,11 @@ fn weld_vertices_spatial_hash(
     Ok((new_vertices, new_indices))
 }
 
-/// forsyth vertex cache optimization
 fn optimize_vertex_cache_forsyth(indices: &[u32]) -> PixieResult<Vec<u32>> {
     
     let mut optimized = indices.to_vec();
     let _triangle_count = indices.len() / 3;
-    
-    // Simple optimization: group triangles by shared vertices
+
     optimized.sort_by(|a, b| {
         let tri_a = a / 3;
         let tri_b = b / 3;

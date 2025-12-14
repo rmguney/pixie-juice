@@ -1,16 +1,12 @@
-//! WASM-optimized user feedback module for browser console output
-
 extern crate alloc;
 use alloc::{string::String, format, string::ToString};
 
 #[cfg(feature = "web-sys")]
 use web_sys::console;
 
-/// User feedback system optimized for WASM/browser environment
 pub struct UserFeedback;
 
 impl UserFeedback {
-    /// Display a welcoming message with version info (browser console)
     pub fn show_welcome() {
         #[cfg(feature = "web-sys")]
         {
@@ -23,7 +19,6 @@ impl UserFeedback {
         tracing::info!("Pixie Juice initialized");
     }
 
-    /// Display helpful error messages with suggestions (browser console)
     pub fn show_error(error: &str, suggestion: Option<&str>) {
         #[cfg(feature = "web-sys")]
         {
@@ -43,7 +38,6 @@ impl UserFeedback {
         }
     }
 
-    /// Display success messages with metrics (browser console)
     pub fn show_success(message: &str, stats: Option<&str>) {
         #[cfg(feature = "web-sys")]
         {
@@ -63,7 +57,6 @@ impl UserFeedback {
         }
     }
 
-    /// Display warnings that don't halt execution (browser console)
     pub fn show_warning(message: &str) {
         #[cfg(feature = "web-sys")]
         console::warn_1(&format!("Warning: {}", message).into());
@@ -72,7 +65,6 @@ impl UserFeedback {
         tracing::warn!("Warning: {}", message);
     }
 
-    /// Display information messages (browser console)
     pub fn show_info(message: &str) {
         #[cfg(feature = "web-sys")]
         console::log_1(&format!("Info: {}", message).into());
@@ -81,7 +73,6 @@ impl UserFeedback {
         tracing::info!("Info: {}", message);
     }
 
-    /// Enhanced file processing error for WASM context
     pub fn file_processing_error(filename: &str, error: &str) {
         Self::show_error(
             &format!("Failed to process file '{}': {}", filename, error),
@@ -89,7 +80,6 @@ impl UserFeedback {
         );
     }
 
-    /// Enhanced unsupported format error with format list (WASM context)
     pub fn unsupported_format(format: &str, supported: &[&str]) {
         Self::show_error(
             &format!("Unsupported format: {}", format),
@@ -100,7 +90,6 @@ impl UserFeedback {
         );
     }
 
-    /// C hotspot performance feedback
     pub fn c_hotspot_status(enabled: bool, operation: &str) {
         if enabled {
             Self::show_info(&format!("C hotspot enabled for {}: Maximum performance", operation));
@@ -109,7 +98,6 @@ impl UserFeedback {
         }
     }
 
-    /// Performance metrics display
     pub fn show_performance_metrics(
         input_size: usize,
         output_size: usize,
@@ -136,7 +124,6 @@ impl UserFeedback {
         Self::show_success("Processing completed", Some(&metrics));
     }
 
-    /// Progress reporting for WASM (using performance.now())
     #[cfg(feature = "web-sys")]
     pub fn report_progress(operation: &str, progress: f32) {
         let progress_percent = (progress * 100.0).round() as u32;
@@ -146,7 +133,6 @@ impl UserFeedback {
         tracing::info!("Progress - {}: {}%", operation, progress_percent);
     }
 
-    /// Format bytes for human-readable display
     fn format_bytes(bytes: usize) -> String {
         const UNITS: &[&str] = &["B", "KB", "MB", "GB"];
         let mut size = bytes as f64;
@@ -164,17 +150,14 @@ impl UserFeedback {
         }
     }
 
-    /// Memory usage reporting for WASM
     #[cfg(feature = "web-sys")]
     pub fn report_memory_usage() {
         if let Some(_performance) = web_sys::window().and_then(|w| w.performance()) {
-            // Note: performance.memory is not always available in all browsers
             #[cfg(feature = "tracing")]
             tracing::debug!("Memory usage reporting available via Performance API");
         }
     }
 
-    /// Threading status feedback
     pub fn threading_status(enabled: bool, thread_count: usize) {
         if enabled {
             let count_str = if thread_count == 0 { "auto".to_string() } else { thread_count.to_string() };
@@ -184,7 +167,6 @@ impl UserFeedback {
         }
     }
 
-    /// WASM-specific initialization feedback
     pub fn wasm_initialization_complete() {
         #[cfg(feature = "web-sys")]
         {
@@ -196,7 +178,6 @@ impl UserFeedback {
         tracing::info!("WASM initialization complete - ready for processing");
     }
 
-    /// Feature availability feedback
     pub fn feature_status(feature: &str, available: bool) {
         if available {
             Self::show_info(&format!("✅ {} available", feature));
@@ -205,7 +186,6 @@ impl UserFeedback {
         }
     }
 
-    /// Mesh optimization details feedback
     pub fn mesh_optimization_details(
         original_vertices: usize,
         original_faces: usize,
@@ -234,7 +214,6 @@ impl UserFeedback {
         Self::show_success("Mesh optimization completed", Some(&details));
     }
 
-    /// Batch processing summary for WASM
     pub fn batch_summary(
         total_files: usize,
         processed: usize,
@@ -243,17 +222,17 @@ impl UserFeedback {
     ) {
         let summary = if total_saved_bytes > 0 {
             format!(
-                "📊 Batch: {}/{} files processed, {} errors, {} saved",
+                "Batch: {}/{} files processed, {} errors, {} saved",
                 processed, total_files, errors, Self::format_bytes(total_saved_bytes as usize)
             )
         } else if total_saved_bytes < 0 {
             format!(
-                "📊 Batch: {}/{} files processed, {} errors, {} increased",
+                "Batch: {}/{} files processed, {} errors, {} increased",
                 processed, total_files, errors, Self::format_bytes((-total_saved_bytes) as usize)
             )
         } else {
             format!(
-                "📊 Batch: {}/{} files processed, {} errors",
+                "Batch: {}/{} files processed, {} errors",
                 processed, total_files, errors
             )
         };
@@ -261,15 +240,13 @@ impl UserFeedback {
         Self::show_success("Batch processing completed", Some(&summary));
     }
 
-    /// Debug mode notification
     pub fn debug_mode_enabled() {
-        Self::show_info("🐛 Debug mode enabled - verbose output active");
+        Self::show_info("Debug mode enabled - verbose output active");
     }
 
-    /// Experimental feature warning
     pub fn experimental_feature_warning(feature: &str) {
         Self::show_warning(&format!(
-            "⚗️  Using experimental feature: {}. Results may vary.",
+            "Using experimental feature: {}. Results may vary.",
             feature
         ));
     }

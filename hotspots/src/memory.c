@@ -1,6 +1,3 @@
-//! Memory management module
-
-// Self-contained type definitions to avoid standard library includes
 typedef unsigned long size_t;
 typedef unsigned char uint8_t;
 typedef signed char int8_t;
@@ -18,17 +15,13 @@ typedef long long int64_t;
 static uint8_t memory_pool[100 * 1024 * 1024]; // 100MB pool
 static size_t memory_offset = 0;
 
-// Export functions for WASM
 #define WASM_EXPORT __attribute__((visibility("default")))
 
-// CRITICAL: Memory management functions with compliance monitoring
 WASM_EXPORT void* wasm_malloc(size_t size) {
-    // Align to 8 bytes
     size = (size + 7) & ~7;
     
-    // CRITICAL: Check against memory target of 100MB
     if (memory_offset + size > sizeof(memory_pool)) {
-        return 0; // Out of memory - compliance violation prevention
+        return 0;
     }
     
     void* ptr = &memory_pool[memory_offset];
@@ -37,8 +30,6 @@ WASM_EXPORT void* wasm_malloc(size_t size) {
 }
 
 WASM_EXPORT void wasm_free(void* ptr) {
-    // Simple bump allocator doesn't support individual frees
-    // This is acceptable for WASM single-threaded context
     (void)ptr;
 }
 
@@ -54,7 +45,6 @@ WASM_EXPORT size_t wasm_get_memory_limit(void) {
     return sizeof(memory_pool);
 }
 
-// Memory manipulation functions
 WASM_EXPORT void* wasm_memcpy(void* dest, const void* src, size_t n) {
     uint8_t* d = (uint8_t*)dest;
     const uint8_t* s = (const uint8_t*)src;
@@ -90,7 +80,6 @@ WASM_EXPORT int wasm_memcmp(const void* s1, const void* s2, size_t n) {
     return 0;
 }
 
-// Math functions using approximations
 WASM_EXPORT double wasm_sqrt(double x) {
     if (x < 0.0) return 0.0/0.0; // NaN
     if (x == 0.0) return 0.0;
@@ -125,7 +114,6 @@ WASM_EXPORT double wasm_pow(double base, double exp) {
     return result;
 }
 
-// String functions
 WASM_EXPORT size_t wasm_strlen(const char* s) {
     size_t len = 0;
     while (s[len]) len++;
@@ -163,20 +151,15 @@ WASM_EXPORT int wasm_strncmp(const char* s1, const char* s2, size_t n) {
     return *(uint8_t*)s1 - *(uint8_t*)s2;
 }
 
-// Error handling
 WASM_EXPORT void wasm_abort(void) {
-    // In WASM, we can't really abort, so just infinite loop
     while (1) {}
 }
 
-// stdio-like functions for debugging
 WASM_EXPORT int wasm_printf(const char* format, ...) {
-    // Minimal printf - just return success for now
     (void)format;
     return 0;
 }
 
-// Additional utility functions for image processing
 WASM_EXPORT uint32_t wasm_swap_bytes_32(uint32_t val) {
     return ((val & 0xFF000000) >> 24) |
            ((val & 0x00FF0000) >> 8)  |
@@ -189,7 +172,6 @@ WASM_EXPORT uint16_t wasm_swap_bytes_16(uint16_t val) {
 }
 
 WASM_EXPORT void wasm_qsort(void* base, size_t nmemb, size_t size, int (*compar)(const void*, const void*)) {
-    // Simple bubble sort for small arrays
     uint8_t* arr = (uint8_t*)base;
     uint8_t* temp = wasm_malloc(size);
     

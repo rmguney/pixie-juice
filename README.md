@@ -1,10 +1,10 @@
 # Pixie Juice
 
-**Secure and high performance media processing engine in Rust and C, for WebAssembly targets.**
+**Secure and high performance graphics processing engine in Rust and C, for WebAssembly targets.**
 
-Pixie Juice is a client side WebAssembly application built with Rust and C that optimizes images and 3D models without uploading files to any server. Your data never leaves your device, ensuring complete information security while delivering fast media processing.
+Pixie Juice is a client side WebAssembly application built with Rust and C that optimizes images and 3D meshes without uploading files to any server. Your data never leaves your device, ensuring complete information security while delivering fast media processing.
 
-## Phase 1 - Core Features for MVP (under active development, hot mess)
+## Phase 1 - Core Features for MVP (under active development)
 
 ### Image Optimization
 
@@ -24,7 +24,7 @@ Pixie Juice is a client side WebAssembly application built with Rust and C that 
 - **Interactive Preview**: 3D model viewer in browser
 - **Format Conversion**: Convert between formats
 
-### Status of Individual Formats
+### Status of Individual Formats (take this with a grain of salt, its a hot mess)
 
 | Format | Status | Compression | Notes |
 |--------|--------|-------------|----------|
@@ -44,6 +44,14 @@ Pixie Juice is a client side WebAssembly application built with Rust and C that 
 | **STL** | ⚠️ Issues | Various | ⚠️ Parsing errors |
 | **FBX** | ⚠️ Issues | Various | ⚠️ Parsing errors |
 
+### Test Suite (awaiting overhaul)
+
+- Fixture generation for testing formats
+- Comprehensive tests for all supported formats
+- Automated browser tests with Playwright (if necessary for WASM validation
+- Performance benchmarks to ensure speed targets are met)
+- Memory leak checks on WASM heap
+
 ## Phase 2 - Performance and Platform Enhancements (hopefully one day)
 
 - **WebGPU and WebGL Integration**: GPU-accelerated processing and preview
@@ -61,12 +69,10 @@ Pixie Juice is a client side WebAssembly application built with Rust and C that 
 
 ## Technical Overview
 
-- **Hybrid Engine**: Rust `#![no_std]` core with custom WASM allocator, C SIMD hotspots, and manual FFI bindings
+- **Hybrid Engine**: Rust `#![no_std]` core with custom WASM allocator, freestanding C SIMD hotspots, and manual FFI bindings
 - **WASM-First**: Optimized for client-side browser execution
 - **Real-time**: Instant preview and processing
-- **Frontend**: Next.js 15 + React 19 + Three.js
-- **Testing**: Python automation with Playwright and pytest
-- **Test Fixtures**: Custom fixture generation script
+- **Frontend**: Vite + React 19 + Three.js
 
 ## Quick Start
 

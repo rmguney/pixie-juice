@@ -3,32 +3,26 @@
 #include "image_kernel.h"
 #include "util.h"
 
-// WASM SIMD support
 #ifdef __wasm_simd128__
-    #include <wasm_simd128.h>
     #define SIMD_AVAILABLE 1
 #else
     #define SIMD_AVAILABLE 0
 #endif
 
-// Optimized WASM math functions using Taylor series and Newton's method
 static inline float fast_sqrt(float x) {
     if (x <= 0.0f) return 0.0f;
     
-    // Newton's method with excellent convergence
     float guess = x * 0.5f;
-    for (int i = 0; i < 6; i++) { // 6 iterations gives excellent precision
+    for (int i = 0; i < 6; i++) {
         guess = (guess + x / guess) * 0.5f;
     }
     return guess;
 }
 
 static inline float fast_exp(float x) {
-    // Optimized exponential using Pade approximation
-    if (x > 88.0f) return 3.4e38f; // Prevent overflow
+    if (x > 88.0f) return 3.4e38f;
     if (x < -88.0f) return 0.0f;
     
-    // Pade(4,4) approximation: more accurate than Taylor series
     const float c0 = 1.0f;
     const float c1 = 0.5f;
     const float c2 = 0.125f;
@@ -46,24 +40,21 @@ static inline float fast_exp(float x) {
 }
 
 static inline float fast_log(float x) {
-    if (x <= 0.0f) return -3.4e38f; // -infinity
+    if (x <= 0.0f) return -3.4e38f;
     if (x == 1.0f) return 0.0f;
     
-    // Optimized natural logarithm using bit manipulation and polynomial
     union { float f; uint32_t i; } u = { x };
     float log2_x = (float)((u.i >> 23) - 127);
-    u.i = (u.i & 0x007FFFFF) | 0x3F800000; // Normalize mantissa
+    u.i = (u.i & 0x007FFFFF) | 0x3F800000;
     float y = u.f;
     
-    // High-precision polynomial for log(1+x) where x is near 0
     y = (y - 1.0f) / (y + 1.0f);
     float y2 = y * y;
     float result = y * (2.0f + y2 * (0.666666667f + y2 * (0.4f + y2 * 0.285714286f)));
     
-    return result + log2_x * 0.693147181f; // ln(2) = 0.693147181
+    return result + log2_x * 0.693147181f;
 }
 
-// Advanced color quantization using Octree algorithm
 typedef struct OctreeNode {
     uint32_t r, g, b, a;
     uint32_t count;
@@ -74,13 +65,12 @@ typedef struct OctreeNode {
 
 typedef struct {
     OctreeNode* root;
-    OctreeNode* reducible[8]; // One list per level
+    OctreeNode* reducible[8];
     uint32_t leaf_count;
     uint32_t max_colors;
     uint8_t depth;
 } Octree;
 
-// WASM memory management using external allocator
 extern void* wasm_malloc(size_t size);
 extern void wasm_free(void* ptr);
 
@@ -109,7 +99,6 @@ static OctreeNode* create_octree_node(uint8_t level, Octree* tree) {
 
 static void add_color_to_octree(Octree* tree, uint32_t color, uint32_t level, OctreeNode* node) {
     if (level == 8) {
-        // Leaf node - store color
         node->r += (color >> 24) & 0xFF;
         node->g += (color >> 16) & 0xFF;
         node->b += (color >> 8) & 0xFF;
@@ -118,7 +107,6 @@ static void add_color_to_octree(Octree* tree, uint32_t color, uint32_t level, Oc
         return;
     }
     
-    // Calculate index for this level
     uint32_t index = ((color >> (21 - level * 3)) & 0x04) |
                      ((color >> (14 - level * 3)) & 0x02) |
                      ((color >> (7 - level * 3)) & 0x01);
@@ -133,7 +121,6 @@ static void add_color_to_octree(Octree* tree, uint32_t color, uint32_t level, Oc
 }
 
 static void reduce_octree(Octree* tree) {
-    // Find deepest level with reducible nodes
     int level = 6;
     while (level >= 0 && !tree->reducible[level]) {
         level--;
@@ -146,7 +133,6 @@ static void reduce_octree(Octree* tree) {
     
     uint32_t r = 0, g = 0, b = 0, a = 0, count = 0;
     
-    // Merge children into parent
     for (int i = 0; i < 8; i++) {
         if (node->children[i]) {
             r += node->children[i]->r;
@@ -173,7 +159,6 @@ static void extract_palette(OctreeNode* node, Color32* palette, uint32_t* index)
     if (!node) return;
     
     if (node->children_mask == 0) {
-        // Leaf node
         if (node->count > 0) {
             palette[*index].r = (uint8_t)(node->r / node->count);
             palette[*index].g = (uint8_t)(node->g / node->count);
@@ -184,7 +169,6 @@ static void extract_palette(OctreeNode* node, Color32* palette, uint32_t* index)
         return;
     }
     
-    // Internal node - traverse children
     for (int i = 0; i < 8; i++) {
         if (node->children[i]) {
             extract_palette(node->children[i], palette, index);
@@ -192,18 +176,16 @@ static void extract_palette(OctreeNode* node, Color32* palette, uint32_t* index)
     }
 }
 
-QuantizedImage* quantize_colors_octree(const uint8_t* rgba_data, size_t width, size_t height, size_t max_colors) {
+WASM_EXPORT QuantizedImage* quantize_colors_octree(const uint8_t* rgba_data, size_t width, size_t height, size_t max_colors) {
     if (!rgba_data || width == 0 || height == 0 || max_colors == 0) {
         return NULL;
     }
     
-    // Initialize octree
     Octree tree = {0};
     tree.max_colors = max_colors;
     tree.root = create_octree_node(0, &tree);
     if (!tree.root) return NULL;
     
-    // Add all colors to octree
     size_t pixel_count = width * height;
     for (size_t i = 0; i < pixel_count; i++) {
         uint32_t color = (rgba_data[i*4] << 24) | (rgba_data[i*4+1] << 16) | 
@@ -211,13 +193,11 @@ QuantizedImage* quantize_colors_octree(const uint8_t* rgba_data, size_t width, s
         
         add_color_to_octree(&tree, color, 0, tree.root);
         
-        // Reduce tree if necessary
         while (tree.leaf_count > max_colors) {
             reduce_octree(&tree);
         }
     }
     
-    // Create result structure
     QuantizedImage* result = (QuantizedImage*)wasm_malloc(sizeof(QuantizedImage));
     if (!result) return NULL;
     
@@ -230,26 +210,22 @@ QuantizedImage* quantize_colors_octree(const uint8_t* rgba_data, size_t width, s
         return NULL;
     }
     
-    // Extract palette
     uint32_t palette_index = 0;
     extract_palette(tree.root, result->palette, &palette_index);
     result->palette_size = palette_index;
     result->width = width;
     result->height = height;
     
-    // Map pixels to palette indices
     for (size_t i = 0; i < pixel_count; i++) {
         uint8_t r = rgba_data[i*4];
         uint8_t g = rgba_data[i*4+1]; 
         uint8_t b = rgba_data[i*4+2];
         uint8_t a = rgba_data[i*4+3];
         
-        // Find closest palette color using perceptual distance
         float min_distance = 1e30f;
         uint8_t best_index = 0;
         
         for (uint32_t j = 0; j < result->palette_size; j++) {
-            // Use perceptual color difference (weighted RGB)
             float dr = (float)(r - result->palette[j].r) * 0.299f;
             float dg = (float)(g - result->palette[j].g) * 0.587f;
             float db = (float)(b - result->palette[j].b) * 0.114f;
@@ -268,7 +244,6 @@ QuantizedImage* quantize_colors_octree(const uint8_t* rgba_data, size_t width, s
     return result;
 }
 
-// Advanced median cut quantization with variance-based splitting
 typedef struct {
     uint8_t r, g, b, a;
 } ColorEntry;
@@ -288,7 +263,6 @@ static int compare_blue(const void* a, const void* b) {
 static void median_cut_recursive(ColorEntry* colors, size_t count, Color32* palette, 
                                 size_t* palette_index, size_t max_depth) {
     if (max_depth == 0 || count <= 1) {
-        // Create palette entry from average
         uint32_t r = 0, g = 0, b = 0, a = 0;
         for (size_t i = 0; i < count; i++) {
             r += colors[i].r;
@@ -305,7 +279,6 @@ static void median_cut_recursive(ColorEntry* colors, size_t count, Color32* pale
         return;
     }
     
-    // Calculate variance for each channel
     uint32_t r_sum = 0, g_sum = 0, b_sum = 0;
     uint64_t r_sq_sum = 0, g_sq_sum = 0, b_sq_sum = 0;
     
@@ -322,7 +295,6 @@ static void median_cut_recursive(ColorEntry* colors, size_t count, Color32* pale
     uint64_t g_var = g_sq_sum - (uint64_t)g_sum * g_sum / count;
     uint64_t b_var = b_sq_sum - (uint64_t)b_sum * b_sum / count;
     
-    // Choose axis with highest variance
     int (*compare_func)(const void*, const void*) = compare_red;
     if (g_var > r_var && g_var > b_var) {
         compare_func = compare_green;
@@ -330,8 +302,6 @@ static void median_cut_recursive(ColorEntry* colors, size_t count, Color32* pale
         compare_func = compare_blue;
     }
     
-    // Sort colors by chosen axis
-    // Simple insertion sort for WASM compatibility
     for (size_t i = 1; i < count; i++) {
         ColorEntry key = colors[i];
         size_t j = i;
@@ -342,26 +312,23 @@ static void median_cut_recursive(ColorEntry* colors, size_t count, Color32* pale
         colors[j] = key;
     }
     
-    // Split at median
     size_t median = count / 2;
     median_cut_recursive(colors, median, palette, palette_index, max_depth - 1);
     median_cut_recursive(colors + median, count - median, palette, palette_index, max_depth - 1);
 }
 
-QuantizedImage* quantize_colors_median_cut(const uint8_t* rgba_data, size_t width, size_t height, size_t max_colors) {
+WASM_EXPORT QuantizedImage* quantize_colors_median_cut(const uint8_t* rgba_data, size_t width, size_t height, size_t max_colors) {
     if (!rgba_data || width == 0 || height == 0 || max_colors == 0) {
         return NULL;
     }
     
     size_t pixel_count = width * height;
     
-    // Create unique color list
     ColorEntry* unique_colors = (ColorEntry*)wasm_malloc(pixel_count * sizeof(ColorEntry));
     if (!unique_colors) return NULL;
     
     size_t unique_count = 0;
     
-    // Extract unique colors (simple implementation for WASM)
     for (size_t i = 0; i < pixel_count; i++) {
         ColorEntry color = {
             rgba_data[i*4],
@@ -370,7 +337,6 @@ QuantizedImage* quantize_colors_median_cut(const uint8_t* rgba_data, size_t widt
             rgba_data[i*4+3]
         };
         
-        // Check if color already exists
         int found = 0;
         for (size_t j = 0; j < unique_count; j++) {
             if (unique_colors[j].r == color.r && unique_colors[j].g == color.g &&
@@ -385,7 +351,6 @@ QuantizedImage* quantize_colors_median_cut(const uint8_t* rgba_data, size_t widt
         }
     }
     
-    // Create result structure
     QuantizedImage* result = (QuantizedImage*)wasm_malloc(sizeof(QuantizedImage));
     if (!result) {
         wasm_free(unique_colors);
@@ -404,7 +369,6 @@ QuantizedImage* quantize_colors_median_cut(const uint8_t* rgba_data, size_t widt
         return NULL;
     }
     
-    // Apply median cut algorithm
     size_t palette_index = 0;
     size_t max_depth = 0;
     size_t temp = max_colors;
@@ -418,7 +382,6 @@ QuantizedImage* quantize_colors_median_cut(const uint8_t* rgba_data, size_t widt
     result->width = width;
     result->height = height;
     
-    // Map pixels to palette indices
     for (size_t i = 0; i < pixel_count; i++) {
         uint8_t r = rgba_data[i*4];
         uint8_t g = rgba_data[i*4+1];
@@ -448,18 +411,15 @@ QuantizedImage* quantize_colors_median_cut(const uint8_t* rgba_data, size_t widt
     return result;
 }
 
-// Advanced Gaussian blur with proper separable kernel
 void gaussian_blur_simd(uint8_t* image, int32_t width, int32_t height, int32_t channels, float sigma) {
     if (!image || width <= 0 || height <= 0 || channels <= 0 || sigma <= 0.0f) {
         return;
     }
     
-    // Calculate kernel size (ensure odd)
     int kernel_size = (int)(sigma * 6.0f + 1.0f);
     if (kernel_size % 2 == 0) kernel_size++;
     int radius = kernel_size / 2;
     
-    // Create Gaussian kernel
     float* kernel = (float*)wasm_malloc(kernel_size * sizeof(float));
     if (!kernel) return;
     
@@ -472,19 +432,16 @@ void gaussian_blur_simd(uint8_t* image, int32_t width, int32_t height, int32_t c
         sum += kernel[i];
     }
     
-    // Normalize kernel
     for (int i = 0; i < kernel_size; i++) {
         kernel[i] /= sum;
     }
     
-    // Allocate temporary buffer
     uint8_t* temp = (uint8_t*)wasm_malloc(width * height * channels);
     if (!temp) {
         wasm_free(kernel);
         return;
     }
     
-    // Horizontal pass
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++) {
             for (int c = 0; c < channels; c++) {
@@ -493,7 +450,6 @@ void gaussian_blur_simd(uint8_t* image, int32_t width, int32_t height, int32_t c
                 for (int k = 0; k < kernel_size; k++) {
                     int src_x = x + k - radius;
                     
-                    // Handle boundaries by clamping
                     if (src_x < 0) src_x = 0;
                     if (src_x >= width) src_x = width - 1;
                     
@@ -502,12 +458,11 @@ void gaussian_blur_simd(uint8_t* image, int32_t width, int32_t height, int32_t c
                 }
                 
                 int dst_index = (y * width + x) * channels + c;
-                temp[dst_index] = (uint8_t)(value + 0.5f); // Round to nearest
+                temp[dst_index] = (uint8_t)(value + 0.5f);
             }
         }
     }
     
-    // Vertical pass
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++) {
             for (int c = 0; c < channels; c++) {
@@ -516,7 +471,6 @@ void gaussian_blur_simd(uint8_t* image, int32_t width, int32_t height, int32_t c
                 for (int k = 0; k < kernel_size; k++) {
                     int src_y = y + k - radius;
                     
-                    // Handle boundaries by clamping
                     if (src_y < 0) src_y = 0;
                     if (src_y >= height) src_y = height - 1;
                     
@@ -525,7 +479,7 @@ void gaussian_blur_simd(uint8_t* image, int32_t width, int32_t height, int32_t c
                 }
                 
                 int dst_index = (y * width + x) * channels + c;
-                image[dst_index] = (uint8_t)(value + 0.5f); // Round to nearest
+                image[dst_index] = (uint8_t)(value + 0.5f);
             }
         }
     }
@@ -534,14 +488,12 @@ void gaussian_blur_simd(uint8_t* image, int32_t width, int32_t height, int32_t c
     wasm_free(kernel);
 }
 
-// Advanced Floyd-Steinberg dithering with error diffusion
 void dither_floyd_steinberg(uint8_t* image, int32_t width, int32_t height, int32_t channels, 
                            const Color32* palette, size_t palette_size) {
     if (!image || !palette || width <= 0 || height <= 0 || channels <= 0 || palette_size == 0) {
         return;
     }
     
-    // Allocate error buffers
     float* current_error = (float*)wasm_malloc(width * channels * sizeof(float));
     float* next_error = (float*)wasm_malloc(width * channels * sizeof(float));
     
@@ -551,7 +503,6 @@ void dither_floyd_steinberg(uint8_t* image, int32_t width, int32_t height, int32
         return;
     }
     
-    // Initialize error buffers
     for (int i = 0; i < width * channels; i++) {
         current_error[i] = 0.0f;
         next_error[i] = 0.0f;
@@ -562,11 +513,9 @@ void dither_floyd_steinberg(uint8_t* image, int32_t width, int32_t height, int32
             for (int c = 0; c < channels && c < 4; c++) {
                 int pixel_index = (y * width + x) * channels + c;
                 
-                // Add accumulated error
                 float original = (float)image[pixel_index] + current_error[x * channels + c];
                 original = original < 0.0f ? 0.0f : (original > 255.0f ? 255.0f : original);
                 
-                // Find closest palette color
                 float min_distance = 1e30f;
                 uint8_t closest_color = 0;
                 
@@ -587,19 +536,14 @@ void dither_floyd_steinberg(uint8_t* image, int32_t width, int32_t height, int32
                     }
                 }
                 
-                // Calculate quantization error
                 float error = original - (float)closest_color;
                 
-                // Set quantized pixel
                 image[pixel_index] = closest_color;
                 
-                // Distribute error using Floyd-Steinberg coefficients
-                // Current row: 7/16 to right
                 if (x + 1 < width) {
                     current_error[(x + 1) * channels + c] += error * (7.0f / 16.0f);
                 }
                 
-                // Next row: 3/16 to left, 5/16 to center, 1/16 to right
                 if (y + 1 < height) {
                     if (x > 0) {
                         next_error[(x - 1) * channels + c] += error * (3.0f / 16.0f);
@@ -612,7 +556,6 @@ void dither_floyd_steinberg(uint8_t* image, int32_t width, int32_t height, int32
             }
         }
         
-        // Swap error buffers and clear next error
         float* temp = current_error;
         current_error = next_error;
         next_error = temp;
@@ -626,7 +569,6 @@ void dither_floyd_steinberg(uint8_t* image, int32_t width, int32_t height, int32
     wasm_free(next_error);
 }
 
-// Free allocated quantized image
 void free_quantized_image(QuantizedImage* image) {
     if (image) {
         wasm_free(image->palette);
@@ -635,36 +577,28 @@ void free_quantized_image(QuantizedImage* image) {
     }
 }
 
-// High-performance SIMD operations (when available)
 #if SIMD_AVAILABLE
 
 void simd_rgb_to_grayscale(const uint8_t* rgb, uint8_t* gray, size_t pixel_count) {
-    // Luminance weights: 0.299 R + 0.587 G + 0.114 B
     v128_t weights = wasm_f32x4_make(0.299f, 0.587f, 0.114f, 0.0f);
     
     size_t simd_count = (pixel_count / 4) * 4;
     
     for (size_t i = 0; i < simd_count; i += 4) {
-        // Load 4 RGB pixels (12 bytes)
         v128_t pixels = wasm_v128_load(&rgb[i * 3]);
         
-        // Convert to float and apply luminance formula
         v128_t r = wasm_f32x4_convert_i32x4(wasm_u32x4_extend_low_u16x8(
                    wasm_u16x8_extend_low_u8x16(pixels)));
         
-        // Simplified grayscale conversion
         v128_t result = wasm_f32x4_mul(r, weights);
         
-        // Convert back to 8-bit
         v128_t gray_32 = wasm_i32x4_trunc_sat_f32x4(result);
         v128_t gray_16 = wasm_u16x8_narrow_i32x4(gray_32, gray_32);
         v128_t gray_8 = wasm_u8x16_narrow_i16x8(gray_16, gray_16);
         
-        // Store results
         wasm_v128_store(&gray[i], gray_8);
     }
     
-    // Handle remaining pixels
     for (size_t i = simd_count; i < pixel_count; i++) {
         float r = (float)rgb[i * 3];
         float g = (float)rgb[i * 3 + 1];
@@ -684,8 +618,9 @@ void simd_rgb_to_grayscale(const uint8_t* rgb, uint8_t* gray, size_t pixel_count
     }
 }
 
-// WASM export wrapper for Floyd-Steinberg dithering
-void apply_floyd_steinberg_dither(
+#endif
+
+WASM_EXPORT int apply_floyd_steinberg_dither(
     uint8_t* rgba_data,
     size_t width,
     size_t height,
@@ -693,15 +628,14 @@ void apply_floyd_steinberg_dither(
     size_t palette_size
 ) {
     if (!rgba_data || !palette || width == 0 || height == 0 || palette_size == 0) {
-        return;
+        return 0;
     }
     
-    // Call the internal dithering function with RGBA channels (4)
     dither_floyd_steinberg(rgba_data, (int32_t)width, (int32_t)height, 4, palette, palette_size);
+    return 1;
 }
 
-// Gaussian blur wrapper for WASM exports
-void apply_gaussian_blur(
+WASM_EXPORT void apply_gaussian_blur(
     uint8_t* rgba_data,
     size_t width,
     size_t height,
@@ -712,11 +646,9 @@ void apply_gaussian_blur(
         return;
     }
     
-    // Call the internal SIMD-optimized blur function
     gaussian_blur_simd(rgba_data, (int32_t)width, (int32_t)height, (int32_t)channels, sigma);
 }
 
-// TIFF LZW compression with SIMD string matching for optimal performance
 TIFFProcessResult* compress_tiff_lzw_simd(
     const uint8_t* rgba_data,
     size_t width,
@@ -731,48 +663,41 @@ TIFFProcessResult* compress_tiff_lzw_simd(
     if (!result) return NULL;
     
     size_t pixel_count = width * height;
-    size_t estimated_size = pixel_count * 3; // RGB without alpha
+    size_t estimated_size = pixel_count * 3;
     
-    // Apply predictor preprocessing for better LZW compression
     uint8_t* processed_data = (uint8_t*)wasm_malloc(pixel_count * 4);
     if (!processed_data) {
         wasm_free(result);
         return NULL;
     }
     
-    // Copy and apply horizontal predictor with SIMD optimization
     #if SIMD_AVAILABLE
     for (size_t y = 0; y < height; y++) {
         const uint8_t* src_row = &rgba_data[y * width * 4];
         uint8_t* dst_row = &processed_data[y * width * 4];
         
-        // First pixel of each row - no prediction
-        dst_row[0] = src_row[0]; // R
-        dst_row[1] = src_row[1]; // G
-        dst_row[2] = src_row[2]; // B
-        dst_row[3] = src_row[3]; // A
+        dst_row[0] = src_row[0];
+        dst_row[1] = src_row[1];
+        dst_row[2] = src_row[2];
+        dst_row[3] = src_row[3];
         
-        // SIMD-accelerated horizontal predictor for remaining pixels
         for (size_t x = 1; x < width; x++) {
             size_t idx = x * 4;
             size_t prev_idx = (x - 1) * 4;
             
-            // Horizontal predictor: current - previous
-            dst_row[idx] = src_row[idx] - src_row[prev_idx];         // R
-            dst_row[idx + 1] = src_row[idx + 1] - src_row[prev_idx + 1]; // G
-            dst_row[idx + 2] = src_row[idx + 2] - src_row[prev_idx + 2]; // B
-            dst_row[idx + 3] = src_row[idx + 3] - src_row[prev_idx + 3]; // A
+            dst_row[idx] = src_row[idx] - src_row[prev_idx];
+            dst_row[idx + 1] = src_row[idx + 1] - src_row[prev_idx + 1];
+            dst_row[idx + 2] = src_row[idx + 2] - src_row[prev_idx + 2];
+            dst_row[idx + 3] = src_row[idx + 3] - src_row[prev_idx + 3];
         }
     }
     #else
-    // Fallback without SIMD
     memcpy_simd(processed_data, rgba_data, pixel_count * 4);
     #endif
     
-    // Simulate LZW compression with aggressive optimization
     size_t compressed_size = estimated_size * (100 - quality) / 100;
     if (compressed_size < estimated_size / 4) {
-        compressed_size = estimated_size / 4; // Minimum reasonable compression
+        compressed_size = estimated_size / 4;
     }
     
     result->data = (uint8_t*)wasm_malloc(compressed_size);
@@ -782,7 +707,6 @@ TIFFProcessResult* compress_tiff_lzw_simd(
         return NULL;
     }
     
-    // Copy processed data with size reduction simulation
     size_t copy_size = compressed_size < pixel_count * 4 ? compressed_size : pixel_count * 4;
     memcpy_simd(result->data, processed_data, copy_size);
     
@@ -790,14 +714,13 @@ TIFFProcessResult* compress_tiff_lzw_simd(
     result->width = (uint32_t)width;
     result->height = (uint32_t)height;
     result->bits_per_sample = 8;
-    result->compression = 5; // LZW compression tag
+    result->compression = 5;
     
     wasm_free(processed_data);
     return result;
 }
 
-// TIFF metadata stripping with SIMD tag processing
-TIFFProcessResult* strip_tiff_metadata_simd(
+WASM_EXPORT TIFFProcessResult* strip_tiff_metadata_simd_c_hotspot(
     const uint8_t* tiff_data,
     size_t data_size,
     bool preserve_icc
@@ -809,7 +732,6 @@ TIFFProcessResult* strip_tiff_metadata_simd(
     TIFFProcessResult* result = (TIFFProcessResult*)wasm_malloc(sizeof(TIFFProcessResult));
     if (!result) return NULL;
     
-    // Estimate output size (metadata usually 5-15% of file)
     size_t estimated_size = data_size * 85 / 100;
     result->data = (uint8_t*)wasm_malloc(estimated_size);
     if (!result->data) {
@@ -817,41 +739,36 @@ TIFFProcessResult* strip_tiff_metadata_simd(
         return NULL;
     }
     
-    // SIMD-accelerated metadata tag identification and removal
     const uint8_t* src = tiff_data;
     uint8_t* dst = result->data;
     size_t dst_pos = 0;
     
-    // Copy TIFF header (8 bytes)
     memcpy_simd(dst, src, 8);
     dst_pos += 8;
     
-    // Process remaining data with metadata filtering
     #if SIMD_AVAILABLE
-    // SIMD pattern matching for common metadata tags
     const uint16_t metadata_tags[] = {
-        0x010F, // Make
-        0x0110, // Model  
-        0x0112, // Orientation
-        0x011A, // XResolution
-        0x011B, // YResolution
-        0x0128, // ResolutionUnit
-        0x0131, // Software
-        0x0132, // DateTime
-        0x013B, // Artist
-        0x8298, // Copyright
-        0x8769, // EXIF IFD
-        0x8825, // GPS IFD
+        0x010F,
+        0x0110,
+        0x0112,
+        0x011A,
+        0x011B,
+        0x0128,
+        0x0131,
+        0x0132,
+        0x013B,
+        0x8298,
+        0x8769,
+        0x8825,
     };
     
     for (size_t i = 8; i < data_size - 2; i++) {
         uint16_t tag = *(uint16_t*)(src + i);
         bool is_metadata = false;
         
-        // Check if current tag is metadata (preserve ICC if requested)
         for (size_t j = 0; j < sizeof(metadata_tags) / sizeof(uint16_t); j++) {
             if (tag == metadata_tags[j]) {
-                if (preserve_icc && tag == 0x8773) { // ICC Profile tag
+                if (preserve_icc && tag == 0x8773) {
                     continue;
                 }
                 is_metadata = true;
@@ -864,22 +781,20 @@ TIFFProcessResult* strip_tiff_metadata_simd(
         }
     }
     #else
-    // Fallback: copy most data (simulated metadata removal)
     size_t copy_size = estimated_size < data_size ? estimated_size : data_size;
     memcpy_simd(dst + dst_pos, src + 8, copy_size - 8);
     dst_pos = copy_size;
     #endif
     
     result->size = dst_pos;
-    result->width = 0;  // Will be extracted from IFD
-    result->height = 0; // Will be extracted from IFD
+    result->width = 0;
+    result->height = 0;
     result->bits_per_sample = 8;
-    result->compression = 1; // No compression after metadata removal
+    result->compression = 1;
     
     return result;
 }
 
-// TIFF predictor preprocessing for better compression
 void apply_tiff_predictor_simd(
     uint8_t* rgba_data,
     size_t width,
@@ -891,24 +806,21 @@ void apply_tiff_predictor_simd(
     }
     
     #if SIMD_AVAILABLE
-    if (predictor_type == 2) { // Horizontal predictor
+    if (predictor_type == 2) {
         for (size_t y = 0; y < height; y++) {
             uint8_t* row = &rgba_data[y * width * 4];
             
-            // Process row with SIMD acceleration
             for (size_t x = width - 1; x > 0; x--) {
                 size_t idx = x * 4;
                 size_t prev_idx = (x - 1) * 4;
                 
-                // Apply horizontal predictor in reverse for encoding
-                row[idx] -= row[prev_idx];         // R
-                row[idx + 1] -= row[prev_idx + 1]; // G  
-                row[idx + 2] -= row[prev_idx + 2]; // B
-                row[idx + 3] -= row[prev_idx + 3]; // A
+                row[idx] -= row[prev_idx];
+                row[idx + 1] -= row[prev_idx + 1];
+                row[idx + 2] -= row[prev_idx + 2];
+                row[idx + 3] -= row[prev_idx + 3];
             }
         }
-    } else if (predictor_type == 3) { // Floating point predictor (simulated)
-        // Apply advanced predictor for better compression of gradients
+    } else if (predictor_type == 3) {
         for (size_t y = 1; y < height; y++) {
             uint8_t* curr_row = &rgba_data[y * width * 4];
             uint8_t* prev_row = &rgba_data[(y - 1) * width * 4];
@@ -917,7 +829,6 @@ void apply_tiff_predictor_simd(
                 size_t idx = x * 4;
                 size_t left_idx = (x - 1) * 4;
                 
-                // Gradient predictor: current - (left + up) / 2
                 for (int c = 0; c < 4; c++) {
                     int predicted = (curr_row[left_idx + c] + prev_row[idx + c]) / 2;
                     curr_row[idx + c] -= (uint8_t)predicted;
@@ -928,7 +839,6 @@ void apply_tiff_predictor_simd(
     #endif
 }
 
-// TIFF color space optimization with SIMD acceleration
 void optimize_tiff_colorspace_simd(
     uint8_t* rgba_data,
     size_t width,
@@ -943,22 +853,18 @@ void optimize_tiff_colorspace_simd(
     
     #if SIMD_AVAILABLE
     if (target_bits_per_channel == 4) {
-        // Reduce to 4 bits per channel for aggressive compression
         for (size_t i = 0; i < pixel_count * 4; i++) {
-            rgba_data[i] = (rgba_data[i] >> 4) << 4; // Keep only upper 4 bits
+            rgba_data[i] = (rgba_data[i] >> 4) << 4;
         }
     } else if (target_bits_per_channel == 6) {
-        // Reduce to 6 bits per channel for balanced compression
         for (size_t i = 0; i < pixel_count * 4; i++) {
-            rgba_data[i] = (rgba_data[i] >> 2) << 2; // Keep only upper 6 bits
+            rgba_data[i] = (rgba_data[i] >> 2) << 2;
         }
     }
     
-    // SIMD-accelerated color space analysis and optimization
     v128_t min_vals = wasm_i32x4_splat(255);
     v128_t max_vals = wasm_i32x4_splat(0);
     
-    // Find color range with SIMD
     for (size_t i = 0; i < pixel_count; i += 4) {
         if (i + 3 < pixel_count) {
             v128_t pixels = wasm_v128_load(&rgba_data[i * 4]);
@@ -967,13 +873,11 @@ void optimize_tiff_colorspace_simd(
         }
     }
     
-    // Apply optimal bit depth based on actual color range
     uint8_t min_r = wasm_u8x16_extract_lane(min_vals, 0);
     uint8_t max_r = wasm_u8x16_extract_lane(max_vals, 0);
     uint8_t range = max_r - min_r;
     
     if (range < 64 && target_bits_per_channel > 6) {
-        // Limited color range - can use fewer bits
         for (size_t i = 0; i < pixel_count * 4; i++) {
             rgba_data[i] = ((rgba_data[i] - min_r) * 255) / range;
         }
@@ -981,8 +885,7 @@ void optimize_tiff_colorspace_simd(
     #endif
 }
 
-// Memory management for TIFF results
-void free_tiff_result(TIFFProcessResult* result) {
+WASM_EXPORT void free_tiff_result(TIFFProcessResult* result) {
     if (result) {
         if (result->data) {
             wasm_free(result->data);
@@ -991,9 +894,6 @@ void free_tiff_result(TIFFProcessResult* result) {
     }
 }
 
-// Advanced SIMD acceleration functions for performance optimization
-
-// Batch process pixels with SIMD for maximum throughput
 void batch_process_pixels_simd(
     uint8_t* rgba_data,
     size_t pixel_count,
@@ -1002,66 +902,104 @@ void batch_process_pixels_simd(
     if (!rgba_data || pixel_count == 0) return;
     
     #if SIMD_AVAILABLE
-    const size_t simd_batch = 16; // Process 16 bytes at a time
-    size_t simd_pixels = (pixel_count * 4) / simd_batch;
-    
-    if (operation_type == 1) { // Brightness adjustment
-        v128_t brightness_factor = wasm_i32x4_splat(110); // 10% brightness increase
-        
-        for (size_t i = 0; i < simd_pixels; i++) {
-            v128_t pixels = wasm_v128_load(&rgba_data[i * simd_batch]);
-            
-            // Split into individual channels and apply brightness
-            v128_t r_vals = wasm_u8x16_extract_lane(pixels, 0);
-            v128_t g_vals = wasm_u8x16_extract_lane(pixels, 1);
-            v128_t b_vals = wasm_u8x16_extract_lane(pixels, 2);
-            
-            // Apply brightness with saturation
-            pixels = wasm_u8x16_add_sat(pixels, wasm_i8x16_splat(25));
-            
-            wasm_v128_store(&rgba_data[i * simd_batch], pixels);
+    const size_t simd_batch_bytes = 16;
+    const size_t total_bytes = pixel_count * 4;
+    const size_t simd_bytes = (total_bytes / simd_batch_bytes) * simd_batch_bytes;
+
+    if (operation_type == 1) {
+        const v128_t add = wasm_i8x16_splat(25);
+
+        for (size_t i = 0; i < simd_bytes; i += simd_batch_bytes) {
+            v128_t pixels = wasm_v128_load(&rgba_data[i]);
+            pixels = wasm_u8x16_add_sat(pixels, add);
+            wasm_v128_store(&rgba_data[i], pixels);
         }
-    } else if (operation_type == 2) { // Contrast adjustment
-        for (size_t i = 0; i < simd_pixels; i++) {
-            v128_t pixels = wasm_v128_load(&rgba_data[i * simd_batch]);
-            
-            // Apply contrast enhancement (simple multiply)
-            v128_t contrast_pixels = wasm_u8x16_mul(pixels, wasm_i8x16_splat(1.2f * 255));
-            
-            wasm_v128_store(&rgba_data[i * simd_batch], contrast_pixels);
+
+        for (size_t i = simd_bytes; i < total_bytes; i++) {
+            rgba_data[i] = (rgba_data[i] < 230) ? (uint8_t)(rgba_data[i] + 25) : 255;
         }
-    } else if (operation_type == 3) { // Saturation adjustment
+    } else if (operation_type == 2) {
+        for (size_t i = 0; i < total_bytes; i++) {
+            int32_t v = (int32_t)rgba_data[i];
+            int32_t c = ((v - 128) * 12) / 10 + 128;
+            if (c < 0) c = 0;
+            if (c > 255) c = 255;
+            rgba_data[i] = (uint8_t)c;
+        }
+    } else if (operation_type == 3) {
         for (size_t i = 0; i < pixel_count; i++) {
             size_t idx = i * 4;
             uint8_t r = rgba_data[idx];
             uint8_t g = rgba_data[idx + 1];
             uint8_t b = rgba_data[idx + 2];
-            
-            // Quick saturation boost using SIMD-optimized math
+
             uint8_t max_val = (r > g) ? ((r > b) ? r : b) : ((g > b) ? g : b);
             uint8_t min_val = (r < g) ? ((r < b) ? r : b) : ((g < b) ? g : b);
-            
+
             if (max_val > min_val) {
-                float saturation_factor = 1.3f;
-                float delta = (max_val - min_val) * saturation_factor;
-                
-                rgba_data[idx] = (uint8_t)(r + (r - min_val) * 0.3f);
-                rgba_data[idx + 1] = (uint8_t)(g + (g - min_val) * 0.3f);
-                rgba_data[idx + 2] = (uint8_t)(b + (b - min_val) * 0.3f);
+                int32_t nr = (int32_t)(r + (float)(r - min_val) * 0.3f);
+                int32_t ng = (int32_t)(g + (float)(g - min_val) * 0.3f);
+                int32_t nb = (int32_t)(b + (float)(b - min_val) * 0.3f);
+
+                if (nr < 0) nr = 0;
+                if (nr > 255) nr = 255;
+                if (ng < 0) ng = 0;
+                if (ng > 255) ng = 255;
+                if (nb < 0) nb = 0;
+                if (nb > 255) nb = 255;
+
+                rgba_data[idx] = (uint8_t)nr;
+                rgba_data[idx + 1] = (uint8_t)ng;
+                rgba_data[idx + 2] = (uint8_t)nb;
             }
         }
     }
     #else
-    // Fallback implementation without SIMD
-    for (size_t i = 0; i < pixel_count * 4; i++) {
-        if (operation_type == 1) {
-            rgba_data[i] = (rgba_data[i] < 230) ? rgba_data[i] + 25 : 255;
+    const size_t total_bytes = pixel_count * 4;
+
+    if (operation_type == 1) {
+        for (size_t i = 0; i < total_bytes; i++) {
+            rgba_data[i] = (rgba_data[i] < 230) ? (uint8_t)(rgba_data[i] + 25) : 255;
+        }
+    } else if (operation_type == 2) {
+        for (size_t i = 0; i < total_bytes; i++) {
+            int32_t v = (int32_t)rgba_data[i];
+            int32_t c = ((v - 128) * 12) / 10 + 128;
+            if (c < 0) c = 0;
+            if (c > 255) c = 255;
+            rgba_data[i] = (uint8_t)c;
+        }
+    } else if (operation_type == 3) {
+        for (size_t i = 0; i < pixel_count; i++) {
+            size_t idx = i * 4;
+            uint8_t r = rgba_data[idx];
+            uint8_t g = rgba_data[idx + 1];
+            uint8_t b = rgba_data[idx + 2];
+
+            uint8_t max_val = (r > g) ? ((r > b) ? r : b) : ((g > b) ? g : b);
+            uint8_t min_val = (r < g) ? ((r < b) ? r : b) : ((g < b) ? g : b);
+
+            if (max_val > min_val) {
+                int32_t nr = (int32_t)(r + (float)(r - min_val) * 0.3f);
+                int32_t ng = (int32_t)(g + (float)(g - min_val) * 0.3f);
+                int32_t nb = (int32_t)(b + (float)(b - min_val) * 0.3f);
+
+                if (nr < 0) nr = 0;
+                if (nr > 255) nr = 255;
+                if (ng < 0) ng = 0;
+                if (ng > 255) ng = 255;
+                if (nb < 0) nb = 0;
+                if (nb > 255) nb = 255;
+
+                rgba_data[idx] = (uint8_t)nr;
+                rgba_data[idx + 1] = (uint8_t)ng;
+                rgba_data[idx + 2] = (uint8_t)nb;
+            }
         }
     }
     #endif
 }
 
-// Parallel color conversion with SIMD acceleration
 void parallel_color_conversion_simd(
     const uint8_t* src_data,
     uint8_t* dst_data,
@@ -1072,46 +1010,41 @@ void parallel_color_conversion_simd(
     if (!src_data || !dst_data || pixel_count == 0) return;
     
     #if SIMD_AVAILABLE
-    if (src_format == 4 && dst_format == 3) { // RGBA to RGB conversion
+    if (src_format == 4 && dst_format == 3) {
         for (size_t i = 0; i < pixel_count; i++) {
             size_t src_idx = i * 4;
             size_t dst_idx = i * 3;
             
-            // Use SIMD for batch loading and processing
             if (i + 4 <= pixel_count) {
                 v128_t rgba_pixels = wasm_v128_load(&src_data[src_idx]);
                 
-                // Extract RGB components (skip alpha)
-                dst_data[dst_idx] = wasm_u8x16_extract_lane(rgba_pixels, 0);     // R
-                dst_data[dst_idx + 1] = wasm_u8x16_extract_lane(rgba_pixels, 1); // G
-                dst_data[dst_idx + 2] = wasm_u8x16_extract_lane(rgba_pixels, 2); // B
+                dst_data[dst_idx] = wasm_u8x16_extract_lane(rgba_pixels, 0);
+                dst_data[dst_idx + 1] = wasm_u8x16_extract_lane(rgba_pixels, 1);
+                dst_data[dst_idx + 2] = wasm_u8x16_extract_lane(rgba_pixels, 2);
                 
-                i += 3; // Skip ahead since we processed 4 pixels
+                i += 3;
             } else {
-                // Handle remaining pixels
-                dst_data[dst_idx] = src_data[src_idx];         // R
-                dst_data[dst_idx + 1] = src_data[src_idx + 1]; // G
-                dst_data[dst_idx + 2] = src_data[src_idx + 2]; // B
+                dst_data[dst_idx] = src_data[src_idx];
+                dst_data[dst_idx + 1] = src_data[src_idx + 1];
+                dst_data[dst_idx + 2] = src_data[src_idx + 2];
             }
         }
-    } else if (src_format == 3 && dst_format == 4) { // RGB to RGBA conversion
+    } else if (src_format == 3 && dst_format == 4) {
         for (size_t i = 0; i < pixel_count; i++) {
             size_t src_idx = i * 3;
             size_t dst_idx = i * 4;
             
-            dst_data[dst_idx] = src_data[src_idx];         // R
-            dst_data[dst_idx + 1] = src_data[src_idx + 1]; // G
-            dst_data[dst_idx + 2] = src_data[src_idx + 2]; // B
-            dst_data[dst_idx + 3] = 255;                   // A (fully opaque)
+            dst_data[dst_idx] = src_data[src_idx];
+            dst_data[dst_idx + 1] = src_data[src_idx + 1];
+            dst_data[dst_idx + 2] = src_data[src_idx + 2];
+            dst_data[dst_idx + 3] = 255;
         }
     }
     #else
-    // Fallback: simple copy
     memcpy_simd(dst_data, src_data, pixel_count * src_format);
     #endif
 }
 
-// Vectorized filter application with SIMD
 void vectorized_filter_apply_simd(
     uint8_t* rgba_data,
     size_t width,
@@ -1124,7 +1057,6 @@ void vectorized_filter_apply_simd(
     #if SIMD_AVAILABLE
     size_t half_kernel = kernel_size / 2;
     
-    // Apply convolution filter with SIMD acceleration
     for (size_t y = half_kernel; y < height - half_kernel; y++) {
         for (size_t x = half_kernel; x < width - half_kernel; x++) {
             v128_t sum_r = wasm_f32x4_splat(0.0f);
@@ -1132,7 +1064,6 @@ void vectorized_filter_apply_simd(
             v128_t sum_b = wasm_f32x4_splat(0.0f);
             v128_t sum_a = wasm_f32x4_splat(0.0f);
             
-            // Apply kernel with SIMD vectorization
             for (size_t ky = 0; ky < kernel_size; ky++) {
                 for (size_t kx = 0; kx < kernel_size; kx++) {
                     size_t py = y + ky - half_kernel;
@@ -1149,7 +1080,6 @@ void vectorized_filter_apply_simd(
                 }
             }
             
-            // Store result
             size_t result_idx = (y * width + x) * 4;
             rgba_data[result_idx] = (uint8_t)wasm_f32x4_extract_lane(sum_r, 0);
             rgba_data[result_idx + 1] = (uint8_t)wasm_f32x4_extract_lane(sum_g, 0);
@@ -1160,7 +1090,6 @@ void vectorized_filter_apply_simd(
     #endif
 }
 
-// Fast downscaling with SIMD acceleration
 void fast_downscale_simd(
     const uint8_t* src_data,
     uint8_t* dst_data,
@@ -1183,7 +1112,6 @@ void fast_downscale_simd(
             size_t src_idx = (src_y * src_width + src_x) * 4;
             size_t dst_idx = (y * dst_width + x) * 4;
             
-            // Use SIMD for pixel copying
             if (src_idx + 3 < src_width * src_height * 4 && dst_idx + 3 < dst_width * dst_height * 4) {
                 v128_t pixel = wasm_v128_load(&src_data[src_idx]);
                 wasm_v128_store(&dst_data[dst_idx], pixel);
@@ -1193,7 +1121,6 @@ void fast_downscale_simd(
     #endif
 }
 
-// Multi-threaded compression simulation with SIMD
 void multi_threaded_compression_simd(
     const uint8_t* rgba_data,
     size_t width,
@@ -1208,15 +1135,12 @@ void multi_threaded_compression_simd(
     size_t estimated_size = pixel_count * 3 * (100 - quality) / 100;
     
     #if SIMD_AVAILABLE
-    // SIMD-accelerated compression simulation
     size_t output_pos = 0;
     
     for (size_t i = 0; i < pixel_count && output_pos < estimated_size; i += 4) {
         if (i + 3 < pixel_count) {
-            // Process 4 pixels at once with SIMD
             v128_t pixels = wasm_v128_load(&rgba_data[i * 4]);
             
-            // Compress by selecting every nth pixel based on quality
             uint8_t step = quality < 50 ? 2 : 1;
             
             if (i % step == 0 && output_pos + 3 < estimated_size) {
@@ -1229,10 +1153,7 @@ void multi_threaded_compression_simd(
     
     *compressed_size = output_pos;
     #else
-    // Fallback: basic compression
     *compressed_size = estimated_size;
     memcpy_simd(compressed_data, rgba_data, estimated_size);
     #endif
 }
-
-#endif

@@ -1,14 +1,11 @@
 #ifndef UTIL_H
 #define UTIL_H
 
-#include <stdint.h>
-#include <stddef.h>
+#include "memory.h"
 
-// WASM-specific definitions
 #ifdef __wasm32__
 #define WASM_EXPORT __attribute__((visibility("default")))
 #define WASM_IMPORT __attribute__((import_module("env")))
-// Simplified implementations for WASM
 #ifndef NO_COMPLEX_MATH
 #define NO_COMPLEX_MATH
 #endif
@@ -21,19 +18,17 @@
 extern "C" {
 #endif
 
-// Buffer utilities
 typedef struct {
     uint8_t* data;
     size_t size;
     size_t capacity;
 } Buffer;
 
-Buffer* buffer_create(size_t initial_capacity);
-int buffer_append(Buffer* buffer, const uint8_t* data, size_t size);
+WASM_EXPORT Buffer* buffer_create(size_t initial_capacity);
+WASM_EXPORT int buffer_append(Buffer* buffer, const uint8_t* data, size_t size);
 int buffer_resize(Buffer* buffer, size_t new_capacity);
-void buffer_free(Buffer* buffer);
+WASM_EXPORT void buffer_destroy(Buffer* buffer);
 
-// Compression helpers
 typedef enum {
     COMPRESSION_NONE,
     COMPRESSION_ZLIB,
@@ -54,11 +49,9 @@ CompressionResult decompress_data(const uint8_t* input, size_t input_size,
                                  CompressionType type);
 void free_compression_result(CompressionResult* result);
 
-// File I/O helpers
 int read_file_to_buffer(const char* filename, Buffer* buffer);
 int write_buffer_to_file(const char* filename, const Buffer* buffer);
 
-// Logging
 typedef enum {
     LOG_ERROR,
     LOG_WARN,
@@ -69,29 +62,29 @@ typedef enum {
 void log_message(LogLevel level, const char* format, ...);
 void set_log_level(LogLevel level);
 
-// SVG optimization functions
-WASM_EXPORT int svg_compress_text(const uint8_t* input, size_t input_size,
-                                 uint8_t* output, size_t* output_size);
+void memcpy_simd(void* dest, const void* src, size_t size);
+void memset_simd(void* dest, int value, size_t size);
+
+WASM_EXPORT uint8_t* svg_compress_text(const uint8_t* input, size_t input_size,
+                                 uint32_t compression_level, size_t* output_size);
 
 WASM_EXPORT int svg_minify_markup_simd(const uint8_t* input, size_t input_size,
                                       uint8_t* output, size_t* output_size);
 
-WASM_EXPORT int svg_optimize_paths(const uint8_t* input, size_t input_size,
-                                  uint8_t* output, size_t* output_size);
+WASM_EXPORT uint8_t* svg_optimize_paths(const uint8_t* input, size_t input_size,
+                                  float precision, size_t* output_size);
 
-// ICO optimization functions  
-WASM_EXPORT int ico_optimize_embedded(const uint8_t* input, size_t input_size,
-                                     uint8_t* output, size_t* output_size,
-                                     uint8_t quality);
+WASM_EXPORT uint8_t* ico_optimize_embedded(const uint8_t* input, size_t input_size,
+                                     uint8_t quality, size_t* output_size);
 
-WASM_EXPORT int ico_strip_metadata_simd(const uint8_t* input, size_t input_size,
-                                       uint8_t* output, size_t* output_size);
+WASM_EXPORT uint8_t* ico_strip_metadata_simd(const uint8_t* input, size_t input_size,
+                                       size_t* output_size);
 
-WASM_EXPORT int ico_compress_directory(const uint8_t* input, size_t input_size,
-                                      uint8_t* output, size_t* output_size);
+WASM_EXPORT uint8_t* ico_compress_directory(const uint8_t* input, size_t input_size,
+                                      uint32_t compression_level, size_t* output_size);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif // UTIL_H
+#endif

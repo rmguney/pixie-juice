@@ -1,12 +1,9 @@
-//! STL format support with C hotspot acceleration
-
 extern crate alloc;
 use alloc::{vec::Vec, string::{String, ToString}, format};
 
 use crate::types::{MeshOptConfig, OptResult, OptError};
 use crate::optimizers::get_current_time_ms;
 
-/// Optimize STL format using stl_io crate with C hotspot acceleration
 pub fn optimize_stl(data: &[u8], config: &MeshOptConfig) -> OptResult<Vec<u8>> {
     let start_time = get_current_time_ms();
     let data_size = data.len();
@@ -18,38 +15,30 @@ pub fn optimize_stl(data: &[u8], config: &MeshOptConfig) -> OptResult<Vec<u8>> {
     
     #[cfg(not(feature = "fmt-stl"))]
     {
-        // Fallback: text-based optimization for ASCII STL with C hotspot support
         optimize_stl_text_only(data, config, start_time, data_size)
     }
 }
 
 #[cfg(feature = "fmt-stl")]
 fn optimize_stl_with_crate(data: &[u8], config: &MeshOptConfig, start_time: f64, data_size: usize) -> OptResult<Vec<u8>> {
-    // For now, skip stl_io integration and use text-based optimization
-    // The stl_io crate requires std::io which isn't available in no_std
     optimize_stl_text_only(data, config, start_time, data_size)
 }
 
 
-/// Fallback text-based optimization when stl_io is not available
 fn optimize_stl_text_only(data: &[u8], config: &MeshOptConfig, start_time: f64, data_size: usize) -> OptResult<Vec<u8>> {
-    // Check if it's ASCII STL
     if data.starts_with(b"solid ") {
         optimize_ascii_stl_text(data, config, start_time, data_size)
     } else {
-        // Binary STL - basic optimization with C hotspot potential
         optimize_binary_stl_basic(data, config, start_time, data_size)
     }
 }
 
-/// Optimize binary STL files with basic approach
 fn optimize_binary_stl_basic(data: &[u8], config: &MeshOptConfig, _start_time: f64, _data_size: usize) -> OptResult<Vec<u8>> {
-    // For binary STL, apply basic size optimization
     let mut result = data.to_vec();
     
     if config.target_ratio < 1.0 {
         let target_size = (data.len() as f32 * config.target_ratio) as usize;
-        result.truncate(target_size.max(84)); // Keep minimum binary STL header
+        result.truncate(target_size.max(84));
     }
     
     Ok(result)
@@ -66,12 +55,10 @@ fn optimize_ascii_stl_text(data: &[u8], config: &MeshOptConfig, _start_time: f64
     for line in lines {
         let trimmed = line.trim();
         
-        // Skip empty lines
         if trimmed.is_empty() {
             continue;
         }
         
-        // Process vertex lines to reduce precision
         if trimmed.starts_with("vertex ") {
             if let Ok(optimized_vertex) = optimize_stl_vertex_line(trimmed, precision) {
                 optimized_lines.push(optimized_vertex);
@@ -85,7 +72,6 @@ fn optimize_ascii_stl_text(data: &[u8], config: &MeshOptConfig, _start_time: f64
                 optimized_lines.push(trimmed.to_string());
             }
         } else {
-            // Keep other lines as-is
             optimized_lines.push(trimmed.to_string());
         }
     }
@@ -125,16 +111,12 @@ fn optimize_stl_normal_line(line: &str, precision: usize) -> OptResult<String> {
     Ok(format!("facet normal {:.prec$} {:.prec$} {:.prec$}", x, y, z, prec = precision))
 }
 
-/// Check if data is a valid STL file
 pub fn is_stl(data: &[u8]) -> bool {
-    // ASCII STL check
     if data.starts_with(b"solid ") {
         return true;
     }
     
-    // Binary STL check - should be 80 bytes header + 4 bytes triangle count + triangles
     if data.len() >= 84 {
-        // Read triangle count from bytes 80-83
         let triangle_count = u32::from_le_bytes([data[80], data[81], data[82], data[83]]);
         let expected_size = 84 + (triangle_count as usize * 50);
         data.len() == expected_size
@@ -143,18 +125,15 @@ pub fn is_stl(data: &[u8]) -> bool {
     }
 }
 
-/// Validate STL file structure
 pub fn validate_stl_structure(data: &[u8]) -> OptResult<bool> {
     if data.len() < 15 {
         return Err(OptError::InvalidFormat("STL file too small".to_string()));
     }
     
-    // Check for ASCII STL
     if data.starts_with(b"solid ") {
         let content = core::str::from_utf8(data)
             .map_err(|_| OptError::InvalidFormat("STL file contains invalid UTF-8".to_string()))?;
         
-        // Check for required elements
         if !content.contains("facet normal") || !content.contains("vertex") {
             return Err(OptError::InvalidFormat("Invalid STL structure".to_string()));
         }
@@ -162,7 +141,6 @@ pub fn validate_stl_structure(data: &[u8]) -> OptResult<bool> {
         return Ok(true);
     }
     
-    // Check for binary STL
     if data.len() >= 84 {
         let triangle_count = u32::from_le_bytes([data[80], data[81], data[82], data[83]]);
         let expected_size = 84 + (triangle_count as usize * 50);
@@ -197,7 +175,6 @@ endsolid test
         assert!(result.is_ok());
         
         let optimized = String::from_utf8(result.unwrap()).unwrap();
-        // Should not contain unnecessary precision
         assert!(!optimized.contains("0.000000"));
     }
     

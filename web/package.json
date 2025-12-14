@@ -2,24 +2,40 @@
   "name": "pixie-juice",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
+    "dev": "vite",
+    "build": "tsc -b && vite build",
     "build:wasm": "cd .. && wasm-pack build --target bundler --out-dir web/pkg --scope pixie-juice --release",
-    "start": "next start",
-    "lint": "next lint"
+    "preview": "vite preview",
+    "lint": "eslint ."
   },
   "dependencies": {
     "@react-three/drei": "^10.4.2",
     "@react-three/fiber": "^9.2.0",
-    "next": "^15.3.5",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "three": "^0.178.0",
     "three-stdlib": "^2.36.0"
   },
   "devDependencies": {
-    "postcss": "^8",
-    "tailwindcss": "^3.4.1"
+    "@eslint/js": "^9.17.0",
+    "@types/node": "^22.0.0",
+    "@types/react": "19.2.3",
+    "@types/react-dom": "^19.2.3",
+    "@types/three": "^0.178.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.4.20",
+    "eslint": "^9.17.0",
+    "eslint-plugin-react-hooks": "^5.1.0",
+    "eslint-plugin-react-refresh": "^0.4.16",
+    "globals": "^15.14.0",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.17",
+    "typescript": "~5.7.2",
+    "typescript-eslint": "^8.18.1",
+    "vite": "^6.0.5",
+    "vite-plugin-top-level-await": "^1.4.4",
+    "vite-plugin-wasm": "^3.4.1"
   }
 }

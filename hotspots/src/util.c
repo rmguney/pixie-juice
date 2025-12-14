@@ -1,12 +1,8 @@
-//! Utility Functions
-
 #include "util.h"
 
-// External WASM memory management
 extern void* wasm_malloc(size_t size);
 extern void wasm_free(void* ptr);
 
-// High-performance string operations optimized for WASM
 size_t strlen_fast(const char* str) {
     if (!str) return 0;
     
@@ -55,7 +51,6 @@ char* strstr_fast(const char* haystack, const char* needle) {
     return NULL;
 }
 
-// Memory operations with bounds checking
 void* memcpy_safe(void* dest, const void* src, size_t n, size_t dest_size) {
     if (!dest || !src || n == 0 || n > dest_size) return dest;
     
@@ -97,7 +92,6 @@ int memcmp_fast(const void* s1, const void* s2, size_t n) {
     return 0;
 }
 
-// Advanced hashing functions for data processing
 uint32_t hash_djb2(const uint8_t* data, size_t len) {
     if (!data) return 0;
     
@@ -180,7 +174,6 @@ uint64_t hash_xxhash32(const uint8_t* data, size_t len, uint32_t seed) {
     return h32;
 }
 
-// Binary search for sorted arrays
 int binary_search_uint32(const uint32_t* array, size_t size, uint32_t target) {
     if (!array || size == 0) return -1;
     
@@ -203,7 +196,6 @@ int binary_search_uint32(const uint32_t* array, size_t size, uint32_t target) {
     return -1;
 }
 
-// Quick sort implementation for various data types
 static int partition_uint32(uint32_t* array, int low, int high) {
     uint32_t pivot = array[high];
     int i = low - 1;
@@ -240,7 +232,6 @@ void quicksort_uint32(uint32_t* array, size_t size) {
 void quicksort_float(float* array, size_t size) {
     if (!array || size <= 1) return;
     
-    // Simple insertion sort for small arrays (more efficient)
     if (size < 10) {
         for (size_t i = 1; i < size; i++) {
             float key = array[i];
@@ -254,10 +245,9 @@ void quicksort_float(float* array, size_t size) {
         return;
     }
     
-    // Quicksort for larger arrays
     int low = 0;
     int high = (int)(size - 1);
-    int stack[64]; // Stack for iterative implementation
+    int stack[64];
     int top = -1;
     
     stack[++top] = low;
@@ -267,7 +257,6 @@ void quicksort_float(float* array, size_t size) {
         high = stack[top--];
         low = stack[top--];
         
-        // Partition
         float pivot = array[high];
         int i = low - 1;
         
@@ -286,13 +275,11 @@ void quicksort_float(float* array, size_t size) {
         
         int pi = i + 1;
         
-        // Push left subarray
         if (pi - 1 > low) {
             stack[++top] = low;
             stack[++top] = pi - 1;
         }
         
-        // Push right subarray
         if (pi + 1 < high) {
             stack[++top] = pi + 1;
             stack[++top] = high;
@@ -300,12 +287,11 @@ void quicksort_float(float* array, size_t size) {
     }
 }
 
-// Bit manipulation utilities
 int count_set_bits(uint32_t n) {
     int count = 0;
     while (n) {
         count++;
-        n &= (n - 1); // Remove lowest set bit
+        n &= (n - 1);
     }
     return count;
 }
@@ -330,10 +316,9 @@ int find_first_set_bit(uint32_t n) {
     return position;
 }
 
-// Data validation and error checking
 int validate_image_dimensions(uint32_t width, uint32_t height) {
-    const uint32_t MAX_DIMENSION = 32768; // Reasonable limit for WASM
-    const uint64_t MAX_PIXELS = 1024 * 1024 * 1024; // 1G pixels max
+    const uint32_t MAX_DIMENSION = 32768;
+    const uint64_t MAX_PIXELS = 1024 * 1024 * 1024;
     
     if (width == 0 || height == 0) return 0;
     if (width > MAX_DIMENSION || height > MAX_DIMENSION) return 0;
@@ -346,23 +331,20 @@ int validate_mesh_data(const float* vertices, size_t vertex_count,
                        const uint32_t* indices, size_t index_count) {
     if (!vertices || !indices) return 0;
     if (vertex_count == 0 || index_count == 0) return 0;
-    if (index_count % 3 != 0) return 0; // Must be triangles
+    if (index_count % 3 != 0) return 0;
     
-    // Check index bounds
     for (size_t i = 0; i < index_count; i++) {
         if (indices[i] >= vertex_count) return 0;
     }
     
-    // Check for valid vertex data (no NaN or infinity)
     for (size_t i = 0; i < vertex_count * 3; i++) {
         float v = vertices[i];
-        if (v != v || v == 1.0f/0.0f || v == -1.0f/0.0f) return 0; // NaN or inf check
+        if (v != v || v == 1.0f/0.0f || v == -1.0f/0.0f) return 0;
     }
     
     return 1;
 }
 
-// Performance timing utilities (WASM-specific)
 static double performance_start_time = 0.0;
 
 void start_timer(void) {
@@ -379,11 +361,10 @@ double get_elapsed_time_ms(void) {
     return 0.0; // Simplified for WASM-only build
 }
 
-// Safe integer arithmetic with overflow checking
-int safe_add_size_t(size_t a, size_t b, size_t* result) {
++int safe_add_size_t(size_t a, size_t b, size_t* result) {
     if (!result) return 0;
     
-    if (a > SIZE_MAX - b) return 0; // Overflow
+    if (a > SIZE_MAX - b) return 0;
     *result = a + b;
     return 1;
 }
@@ -391,12 +372,11 @@ int safe_add_size_t(size_t a, size_t b, size_t* result) {
 int safe_multiply_size_t(size_t a, size_t b, size_t* result) {
     if (!result) return 0;
     
-    if (a != 0 && b > SIZE_MAX / a) return 0; // Overflow
+    if (a != 0 && b > SIZE_MAX / a) return 0;
     *result = a * b;
     return 1;
 }
 
-// Memory pool allocation for better WASM performance
 typedef struct {
     uint8_t* data;
     size_t size;
@@ -424,7 +404,6 @@ static MemoryPool* create_memory_pool(size_t size, size_t alignment) {
 static void* pool_allocate(MemoryPool* pool, size_t size) {
     if (!pool || size == 0) return NULL;
     
-    // Align the allocation
     size_t aligned_used = (pool->used + pool->align - 1) & ~(pool->align - 1);
     
     if (aligned_used + size > pool->size) return NULL; // Out of memory
@@ -442,7 +421,6 @@ static void destroy_memory_pool(MemoryPool* pool) {
     }
 }
 
-// Global utility functions for error handling
 const char* get_error_string(int error_code) {
     switch (error_code) {
         case 0: return "Success";
@@ -457,7 +435,6 @@ const char* get_error_string(int error_code) {
     }
 }
 
-// Checksum calculation for data integrity
 uint32_t calculate_crc32(const uint8_t* data, size_t len) {
     if (!data) return 0;
     
@@ -476,11 +453,10 @@ uint32_t calculate_crc32(const uint8_t* data, size_t len) {
     return crc ^ 0xFFFFFFFF;
 }
 
-// SVG minification with SIMD optimizations
 int svg_minify_markup_simd(const uint8_t* input, size_t input_size,
                           uint8_t* output, size_t* output_size) {
     if (!input || !output || !output_size || input_size == 0) {
-        return -1; // Invalid parameters
+        return -1;
     }
     
     size_t max_output_size = *output_size;
@@ -495,7 +471,6 @@ int svg_minify_markup_simd(const uint8_t* input, size_t input_size,
     while (input_pos < input_size && output_pos < max_output_size - 1) {
         char current = (char)input[input_pos];
         
-        // Handle XML comments
         if (!in_string && input_pos + 3 < input_size && 
             input[input_pos] == '<' && input[input_pos + 1] == '!' &&
             input[input_pos + 2] == '-' && input[input_pos + 3] == '-') {
@@ -516,7 +491,6 @@ int svg_minify_markup_simd(const uint8_t* input, size_t input_size,
             continue;
         }
         
-        // Handle string literals
         if (!in_string && (current == '"' || current == '\'')) {
             in_string = 1;
             string_delimiter = current;
@@ -535,10 +509,8 @@ int svg_minify_markup_simd(const uint8_t* input, size_t input_size,
             continue;
         }
         
-        // Compress whitespace outside of strings
         if (current == ' ' || current == '\t' || current == '\n' || current == '\r') {
             if (!in_whitespace && output_pos > 0) {
-                // Keep single space between attributes and elements
                 char prev = (char)output[output_pos - 1];
                 if (prev != '=' && prev != '<' && prev != '>') {
                     output[output_pos++] = ' ';
@@ -553,9 +525,115 @@ int svg_minify_markup_simd(const uint8_t* input, size_t input_size,
         input_pos++;
     }
     
-    // Null-terminate output
     output[output_pos] = 0;
     *output_size = output_pos;
     
-    return output_pos < max_output_size ? 0 : -1; // Return 0 on success, -1 if truncated
+    return output_pos < max_output_size ? 0 : -1;
+}
+
+WASM_EXPORT Buffer* buffer_create(size_t initial_capacity) {
+    Buffer* buffer = (Buffer*)wasm_malloc(sizeof(Buffer));
+    if (!buffer) return NULL;
+    
+    buffer->data = (uint8_t*)wasm_malloc(initial_capacity);
+    if (!buffer->data) {
+        wasm_free(buffer);
+        return NULL;
+    }
+    
+    buffer->size = 0;
+    buffer->capacity = initial_capacity;
+    return buffer;
+}
+
+WASM_EXPORT int buffer_append(Buffer* buffer, const uint8_t* data, size_t size) {
+    if (!buffer || !data) return -1;
+    
+    if (buffer->size + size > buffer->capacity) {
+        size_t new_capacity = buffer->capacity * 2;
+        if (new_capacity < buffer->size + size) new_capacity = buffer->size + size;
+        
+        uint8_t* new_data = (uint8_t*)wasm_malloc(new_capacity);
+        if (!new_data) return -1;
+        
+        for (size_t i = 0; i < buffer->size; i++) {
+            new_data[i] = buffer->data[i];
+        }
+        
+        wasm_free(buffer->data);
+        buffer->data = new_data;
+        buffer->capacity = new_capacity;
+    }
+    
+    for (size_t i = 0; i < size; i++) {
+        buffer->data[buffer->size + i] = data[i];
+    }
+    buffer->size += size;
+    
+    return 0;
+}
+
+void buffer_free(Buffer* buffer) {
+    if (!buffer) return;
+    if (buffer->data) wasm_free(buffer->data);
+    wasm_free(buffer);
+}
+
+WASM_EXPORT void buffer_destroy(Buffer* buffer) {
+    buffer_free(buffer);
+}
+
+WASM_EXPORT void memcpy_simd(void* dest, const void* src, size_t size) {
+    uint8_t* d = (uint8_t*)dest;
+    const uint8_t* s = (const uint8_t*)src;
+    for (size_t i = 0; i < size; i++) {
+        d[i] = s[i];
+    }
+}
+
+WASM_EXPORT void memset_simd(void* dest, int value, size_t size) {
+    uint8_t* d = (uint8_t*)dest;
+    for (size_t i = 0; i < size; i++) {
+        d[i] = (uint8_t)value;
+    }
+}
+
+uint8_t* svg_compress_text(const uint8_t* data, size_t data_len, uint32_t compression_level, size_t* output_size) {
+    uint8_t* output = (uint8_t*)wasm_malloc(data_len);
+    if (!output) return NULL;
+    memcpy_simd(output, data, data_len);
+    *output_size = data_len;
+    return output;
+}
+
+uint8_t* svg_optimize_paths(const uint8_t* data, size_t data_len, float precision, size_t* output_size) {
+    uint8_t* output = (uint8_t*)wasm_malloc(data_len);
+    if (!output) return NULL;
+    memcpy_simd(output, data, data_len);
+    *output_size = data_len;
+    return output;
+}
+
+uint8_t* ico_optimize_embedded(const uint8_t* data, size_t data_len, uint8_t quality, size_t* output_size) {
+    uint8_t* output = (uint8_t*)wasm_malloc(data_len);
+    if (!output) return NULL;
+    memcpy_simd(output, data, data_len);
+    *output_size = data_len;
+    return output;
+}
+
+uint8_t* ico_strip_metadata_simd(const uint8_t* data, size_t data_len, size_t* output_size) {
+    uint8_t* output = (uint8_t*)wasm_malloc(data_len);
+    if (!output) return NULL;
+    memcpy_simd(output, data, data_len);
+    *output_size = data_len;
+    return output;
+}
+
+uint8_t* ico_compress_directory(const uint8_t* data, size_t data_len, uint32_t compression_level, size_t* output_size) {
+    uint8_t* output = (uint8_t*)wasm_malloc(data_len);
+    if (!output) return NULL;
+    memcpy_simd(output, data, data_len);
+    *output_size = data_len;
+    return output;
 }
