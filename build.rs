@@ -130,6 +130,53 @@ fn compile_c_hotspots() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     
+    let cpp_files = ["color_distance.cpp"];
+    
+    for file in &cpp_files {
+        let path = format!("{}/{}", hotspots_src_dir, file);
+        if std::path::Path::new(&path).exists() {
+            println!("cargo:warning=Compiling C++ file: {}", file);
+            
+            let mut cpp_build = cc::Build::new();
+            cpp_build
+                .cpp(true)
+                .file(&path)
+                .include(hotspots_include_dir)
+                .include(hotspots_src_dir)
+                .opt_level(3)
+                .debug(false)
+                .warnings(false)
+                .compiler(&clang_path)
+                .flag("--target=wasm32-unknown-unknown")
+                .flag("-std=c++17")
+                .flag("-O3")
+                .flag("-flto")
+                .flag("-msimd128")
+                .flag("-mbulk-memory")
+                .flag("-mmutable-globals")
+                .flag("-ffreestanding")
+                .flag("-fno-exceptions")
+                .flag("-fno-rtti")
+                .flag("-fno-threadsafe-statics")
+                .flag("-nostdlib")
+                .flag("-fvisibility=hidden")
+                .flag("-fno-common")
+                .define("__wasm32__", None)
+                .define("WASM_TARGET", None)
+                .define("NDEBUG", None);
+            
+            match cpp_build.try_compile(&format!("pixie_{}", file.trim_end_matches(".cpp"))) {
+                Ok(_) => {
+                    println!("cargo:warning=C++ hotspot '{}' compiled successfully!", file);
+                },
+                Err(e) => {
+                    println!("cargo:warning=C++ compilation failed for '{}': {}", file, e);
+                    println!("cargo:warning=Continuing with C-only hotspots");
+                }
+            }
+        }
+    }
+    
     let out_path = PathBuf::from(env::var("OUT_DIR")?);
     std::fs::write(
         out_path.join("bindings.rs"),

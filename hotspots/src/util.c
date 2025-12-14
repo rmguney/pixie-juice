@@ -357,11 +357,10 @@ void start_timer(void) {
 double get_elapsed_time_ms(void) {
     // Return elapsed time in milliseconds
     // This is a placeholder - actual implementation would use
-    // imported JavaScript performance.now() function
-    return 0.0; // Simplified for WASM-only build
+    return 0.0;
 }
 
-+int safe_add_size_t(size_t a, size_t b, size_t* result) {
+int safe_add_size_t(size_t a, size_t b, size_t* result) {
     if (!result) return 0;
     
     if (a > SIZE_MAX - b) return 0;

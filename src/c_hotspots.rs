@@ -60,6 +60,13 @@ extern "C" {
     fn multi_threaded_compression_simd(rgba_data: *const u8, width: usize, height: usize,
                                       compressed_data: *mut u8, compressed_size: *mut usize,
                                       quality: u8);
+    
+    fn color_distance_perceptual(r1: u8, g1: u8, b1: u8, r2: u8, g2: u8, b2: u8) -> f32;
+    fn rgb_to_linear_batch(rgb: *const u8, linear: *mut f32, count: u32);
+    fn linear_to_rgb_batch(linear: *const f32, rgb: *mut u8, count: u32);
+    fn rgb_to_linear_batch_simd(rgb: *const u8, linear: *mut f32, count: u32);
+    fn color_distance_batch_min(palette: *const u8, palette_size: u32, r: u8, g: u8, b: u8) -> f32;
+    fn find_closest_color(palette: *const u8, palette_size: u32, r: u8, g: u8, b: u8) -> u32;
 }
 
 #[cfg(not(c_hotspots_available))]
@@ -1602,6 +1609,117 @@ pub mod fallback {
 
 pub fn are_c_hotspots_available() -> bool {
     cfg!(c_hotspots_available)
+}
+
+#[cfg(c_hotspots_available)]
+pub mod color {
+    use super::*;
+    
+    pub fn perceptual_distance(r1: u8, g1: u8, b1: u8, r2: u8, g2: u8, b2: u8) -> f32 {
+        unsafe { color_distance_perceptual(r1, g1, b1, r2, g2, b2) }
+    }
+    
+    pub fn rgb_to_linear(rgb: &[u8], linear: &mut [f32]) -> PixieResult<()> {
+        if rgb.len() / 3 != linear.len() / 3 {
+            return Err(PixieError::InvalidInput("RGB and linear buffer size mismatch".into()));
+        }
+        let count = (rgb.len() / 3) as u32;
+        unsafe { rgb_to_linear_batch(rgb.as_ptr(), linear.as_mut_ptr(), count); }
+        Ok(())
+    }
+    
+    pub fn linear_to_rgb(linear: &[f32], rgb: &mut [u8]) -> PixieResult<()> {
+        if linear.len() / 3 != rgb.len() / 3 {
+            return Err(PixieError::InvalidInput("Linear and RGB buffer size mismatch".into()));
+        }
+        let count = (linear.len() / 3) as u32;
+        unsafe { linear_to_rgb_batch(linear.as_ptr(), rgb.as_mut_ptr(), count); }
+        Ok(())
+    }
+    
+    pub fn rgb_to_linear_simd(rgb: &[u8], linear: &mut [f32]) -> PixieResult<()> {
+        if rgb.len() / 3 != linear.len() / 3 {
+            return Err(PixieError::InvalidInput("RGB and linear buffer size mismatch".into()));
+        }
+        let count = (rgb.len() / 3) as u32;
+        unsafe { rgb_to_linear_batch_simd(rgb.as_ptr(), linear.as_mut_ptr(), count); }
+        Ok(())
+    }
+    
+    pub fn find_closest_palette_color(palette: &[u8], r: u8, g: u8, b: u8) -> PixieResult<usize> {
+        if palette.len() % 3 != 0 {
+            return Err(PixieError::InvalidInput("Palette size must be multiple of 3".into()));
+        }
+        let palette_size = (palette.len() / 3) as u32;
+        let idx = unsafe { find_closest_color(palette.as_ptr(), palette_size, r, g, b) };
+        Ok(idx as usize)
+    }
+    
+    pub fn min_palette_distance(palette: &[u8], r: u8, g: u8, b: u8) -> PixieResult<f32> {
+        if palette.len() % 3 != 0 {
+            return Err(PixieError::InvalidInput("Palette size must be multiple of 3".into()));
+        }
+        let palette_size = (palette.len() / 3) as u32;
+        let dist = unsafe { color_distance_batch_min(palette.as_ptr(), palette_size, r, g, b) };
+        Ok(dist)
+    }
+}
+
+#[cfg(not(c_hotspots_available))]
+pub mod color {
+    use super::*;
+    
+    pub fn perceptual_distance(r1: u8, g1: u8, b1: u8, r2: u8, g2: u8, b2: u8) -> f32 {
+        let dr = (r1 as f32 - r2 as f32) / 255.0;
+        let dg = (g1 as f32 - g2 as f32) / 255.0;
+        let db = (b1 as f32 - b2 as f32) / 255.0;
+        dr*dr*0.299 + dg*dg*0.587 + db*db*0.114
+    }
+    
+    pub fn rgb_to_linear(rgb: &[u8], linear: &mut [f32]) -> PixieResult<()> {
+        for i in 0..rgb.len() {
+            let v = rgb[i] as f32 / 255.0;
+            linear[i] = if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) };
+        }
+        Ok(())
+    }
+    
+    pub fn linear_to_rgb(linear: &[f32], rgb: &mut [u8]) -> PixieResult<()> {
+        for i in 0..linear.len() {
+            let v = linear[i];
+            let srgb = if v <= 0.0031308 { v * 12.92 } else { 1.055 * v.powf(1.0/2.4) - 0.055 };
+            rgb[i] = (srgb * 255.0).clamp(0.0, 255.0) as u8;
+        }
+        Ok(())
+    }
+    
+    pub fn rgb_to_linear_simd(rgb: &[u8], linear: &mut [f32]) -> PixieResult<()> {
+        rgb_to_linear(rgb, linear)
+    }
+    
+    pub fn find_closest_palette_color(palette: &[u8], r: u8, g: u8, b: u8) -> PixieResult<usize> {
+        let mut best_idx = 0;
+        let mut best_dist = f32::MAX;
+        for i in 0..(palette.len() / 3) {
+            let dist = perceptual_distance(r, g, b, palette[i*3], palette[i*3+1], palette[i*3+2]);
+            if dist < best_dist {
+                best_dist = dist;
+                best_idx = i;
+            }
+        }
+        Ok(best_idx)
+    }
+    
+    pub fn min_palette_distance(palette: &[u8], r: u8, g: u8, b: u8) -> PixieResult<f32> {
+        let mut min_dist = f32::MAX;
+        for i in 0..(palette.len() / 3) {
+            let dist = perceptual_distance(r, g, b, palette[i*3], palette[i*3+1], palette[i*3+2]);
+            if dist < min_dist {
+                min_dist = dist;
+            }
+        }
+        Ok(min_dist)
+    }
 }
 
 pub fn c_hotspots_info() -> &'static str {

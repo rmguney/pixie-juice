@@ -1,8 +1,8 @@
 # Pixie Juice
 
-**Secure and high performance graphics processing engine in Rust and C, for WebAssembly targets.**
+**Secure and high performance graphics processing engine in C, C++ and Rust for WebAssembly targets.**
 
-Pixie Juice is a client side WebAssembly application built with Rust and C that optimizes images and 3D meshes without uploading files to any server. Your data never leaves your device, ensuring complete information security while delivering fast media processing.
+Pixie Juice is a client side WebAssembly application built with C, C++ and Rust that optimizes images and 3D meshes without uploading files to any server. Your data never leaves your device, ensuring complete information security while delivering fast media processing.
 
 ## Phase 1 - Core Features for MVP (under active development)
 
