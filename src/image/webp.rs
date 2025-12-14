@@ -1,5 +1,5 @@
 extern crate alloc;
-use alloc::{vec::Vec, format, string::ToString};
+use alloc::{vec, vec::Vec, format, string::ToString};
 
 use crate::types::{PixieResult, PixieError, ImageOptConfig, OptResult, OptError};
 
@@ -42,6 +42,7 @@ pub fn optimize_webp_with_config(data: &[u8], quality: u8, _config: &ImageOptCon
                                     data.len(), reencoded.len(), compression);
                     crate::image::log_to_console(&msg);
                 }
+                let _ = compression;
                 return Ok(reencoded);
             },
             Ok(_) => {
@@ -51,6 +52,7 @@ pub fn optimize_webp_with_config(data: &[u8], quality: u8, _config: &ImageOptCon
             Err(e) => {
                 #[cfg(target_arch = "wasm32")]
                 crate::image::log_to_console(&format!("Native re-encoding failed: {}, trying metadata optimization", e));
+                let _ = e;
             }
         }
         
@@ -482,26 +484,38 @@ fn apply_webp_color_quantization(data: &[u8], quality: u8) -> PixieResult<Vec<u8
 
 fn apply_color_quantization_simple(img: &image::DynamicImage, quality: u8) -> PixieResult<image::DynamicImage> {
     use image::{DynamicImage, RgbImage};
-    
+
     let rgb_img = img.to_rgb8();
     let (width, height) = (rgb_img.width(), rgb_img.height());
-    
+
     let bit_shift = match quality {
         0..=20 => 3,
         21..=40 => 2,
         _ => 1,
     };
-    
-    let mut quantized = RgbImage::new(width, height);
-    
-    for (x, y, pixel) in rgb_img.enumerate_pixels() {
-        let r = (pixel[0] >> bit_shift) << bit_shift;
-        let g = (pixel[1] >> bit_shift) << bit_shift;
-        let b = (pixel[2] >> bit_shift) << bit_shift;
-        
-        quantized.put_pixel(x, y, image::Rgb([r, g, b]));
+
+    let raw_in = rgb_img.into_raw();
+    let mut raw_out = vec![0u8; raw_in.len()];
+
+    #[cfg(c_hotspots_available)]
+    {
+        crate::c_hotspots::image::quantize_rgb_bitshift_hotspot(&raw_in, &mut raw_out, bit_shift);
     }
-    
+
+    #[cfg(not(c_hotspots_available))]
+    {
+        let shift = core::cmp::min(bit_shift, 7);
+        let mask = 0xFFu8 << shift;
+        for i in 0..(raw_in.len() / 3) {
+            raw_out[i * 3 + 0] = raw_in[i * 3 + 0] & mask;
+            raw_out[i * 3 + 1] = raw_in[i * 3 + 1] & mask;
+            raw_out[i * 3 + 2] = raw_in[i * 3 + 2] & mask;
+        }
+    }
+
+    let quantized = RgbImage::from_raw(width, height, raw_out)
+        .ok_or_else(|| PixieError::ProcessingError("Failed to create quantized RGB image".into()))?;
+
     Ok(DynamicImage::ImageRgb8(quantized))
 }
 
@@ -678,6 +692,8 @@ fn strip_animated_webp_metadata_aggressive(data: &[u8], quality: u8) -> PixieRes
     let new_file_size = (result.len() - 8) as u32;
     let size_bytes = new_file_size.to_le_bytes();
     result[file_size_pos..file_size_pos + 4].copy_from_slice(&size_bytes);
+
+    let _ = (animation_chunks_preserved, chunks_stripped);
     
     #[cfg(target_arch = "wasm32")]
     {
@@ -1046,20 +1062,14 @@ fn apply_c_hotspot_preprocessing(data: &[u8], quality: u8) -> PixieResult<Vec<u8
 
 #[cfg(c_hotspots_available)]
 fn indices_to_rgba(indices: &[u8], palette: &[crate::c_hotspots::Color32], width: usize, height: usize) -> Vec<u8> {
-    let mut rgba_data = Vec::with_capacity(width * height * 4);
-    
-    for &index in indices {
-        if (index as usize) < palette.len() {
-            let color = &palette[index as usize];
-            rgba_data.push(color.r);
-            rgba_data.push(color.g);
-            rgba_data.push(color.b);
-            rgba_data.push(color.a);
-        } else {
-            rgba_data.extend_from_slice(&[0, 0, 0, 255]);
-        }
-    }
-    
+    let _ = (width, height);
+    let mut rgba_data = vec![0u8; indices.len() * 4];
+    crate::c_hotspots::image::palette_indices_to_rgba_hotspot(
+        indices,
+        palette,
+        &mut rgba_data,
+        crate::c_hotspots::Color32 { r: 0, g: 0, b: 0, a: 255 },
+    );
     rgba_data
 }
 
@@ -1082,7 +1092,7 @@ pub fn convert_any_format_to_webp(data: &[u8], quality: u8) -> PixieResult<Vec<u
         
         #[cfg(feature = "codec-webp")]
         {
-            let webp_quality = match quality {
+            let _webp_quality = match quality {
                 0..=20 => 30.0,
                 21..=40 => 50.0,
                 41..=60 => 70.0,

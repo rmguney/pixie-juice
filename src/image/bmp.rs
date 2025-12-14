@@ -1,5 +1,5 @@
 extern crate alloc;
-use alloc::{vec::Vec, format};
+use alloc::{vec, vec::Vec, format};
 use crate::types::{PixieResult, PixieError, ImageOptConfig};
 
 #[cfg(feature = "image")]
@@ -163,20 +163,14 @@ fn apply_bmp_c_hotspot_preprocessing(_img: &DynamicImage, _quality: u8) -> Pixie
 
 #[cfg(c_hotspots_available)]
 fn indices_to_rgba_bmp(indices: &[u8], palette: &[crate::c_hotspots::Color32], width: usize, height: usize) -> Vec<u8> {
-    let mut rgba_data = Vec::with_capacity(width * height * 4);
-    
-    for &index in indices {
-        if (index as usize) < palette.len() {
-            let color = &palette[index as usize];
-            rgba_data.push(color.r);
-            rgba_data.push(color.g);
-            rgba_data.push(color.b);
-            rgba_data.push(color.a);
-        } else {
-            rgba_data.extend_from_slice(&[0, 0, 0, 255]);
-        }
-    }
-    
+    let _ = (width, height);
+    let mut rgba_data = vec![0u8; indices.len() * 4];
+    crate::c_hotspots::image::palette_indices_to_rgba_hotspot(
+        indices,
+        palette,
+        &mut rgba_data,
+        crate::c_hotspots::Color32 { r: 0, g: 0, b: 0, a: 255 },
+    );
     rgba_data
 }
 

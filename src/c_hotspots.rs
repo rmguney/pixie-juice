@@ -22,6 +22,25 @@ extern "C" {
     fn weld_vertices_spatial(vertices: *const f32, vertex_count: usize, 
                             indices: *const u32, index_count: usize, 
                             tolerance: f32) -> MeshDecimateResult;
+
+    fn compute_mesh_attributes(
+        vertices: *const f32,
+        vertex_count: usize,
+        indices: *const u32,
+        index_count: usize,
+        uvs: *const f32,
+        uv_count: usize,
+        compute_tangents: i32
+    ) -> MeshAttributesResult;
+    fn free_mesh_attributes_result(result: *mut MeshAttributesResult);
+
+    fn optimize_vertex_cache_forsyth(
+        indices: *const u32,
+        index_count: usize,
+        vertex_count: usize,
+        cache_size: u32,
+    ) -> VertexCacheResult;
+    fn free_vertex_cache_result(result: *mut VertexCacheResult);
     fn svg_compress_text(data: *const u8, data_len: usize, 
                         compression_level: u32, 
                         output_size: *mut usize) -> *mut u8;
@@ -60,6 +79,46 @@ extern "C" {
     fn multi_threaded_compression_simd(rgba_data: *const u8, width: usize, height: usize,
                                       compressed_data: *mut u8, compressed_size: *mut usize,
                                       quality: u8);
+    
+    fn color_distance_perceptual(r1: u8, g1: u8, b1: u8, r2: u8, g2: u8, b2: u8) -> f32;
+    fn rgb_to_linear_batch(rgb: *const u8, linear: *mut f32, count: u32);
+    fn linear_to_rgb_batch(linear: *const f32, rgb: *mut u8, count: u32);
+    fn rgb_to_linear_batch_simd(rgb: *const u8, linear: *mut f32, count: u32);
+    fn color_distance_batch_min(palette: *const u8, palette_size: u32, r: u8, g: u8, b: u8) -> f32;
+    fn find_closest_color(palette: *const u8, palette_size: u32, r: u8, g: u8, b: u8) -> u32;
+
+    fn rgb_to_yuv(rgb: *const u8, yuv: *mut u8, pixel_count: usize);
+    fn yuv_to_rgb(yuv: *const u8, rgb: *mut u8, pixel_count: usize);
+    fn rgba_yuv_roundtrip_inplace(rgba: *mut u8, pixel_count: usize);
+    fn quantize_rgb_bitshift(rgb_in: *const u8, rgb_out: *mut u8, pixel_count: usize, bit_shift: u8);
+    fn palette_indices_to_rgba(
+        indices: *const u8,
+        index_count: usize,
+        palette: *const Color32,
+        palette_size: usize,
+        rgba_out: *mut u8,
+        default_r: u8,
+        default_g: u8,
+        default_b: u8,
+        default_a: u8,
+    );
+
+    fn obj_parse_to_mesh(data: *const u8, data_len: usize) -> *mut ObjParseResult;
+    fn free_obj_parse_result(result: *mut ObjParseResult);
+
+    fn ply_find_end_header(data: *const u8, data_len: usize, header_end: *mut usize) -> i32;
+
+    fn normalize_text_whitespace_commas(data: *const u8, data_len: usize, output_size: *mut usize) -> *mut u8;
+
+    fn hotspot_free(ptr: *mut core::ffi::c_void);
+}
+
+#[repr(C)]
+pub struct VertexCacheResult {
+    pub indices: *mut u32,
+    pub index_count: usize,
+    pub success: i32,
+    pub error_message: [u8; 256],
 }
 
 #[cfg(not(c_hotspots_available))]
@@ -80,6 +139,110 @@ pub struct TIFFProcessResult {
     pub height: u32,
     pub bits_per_sample: u8,
     pub compression: u8,
+}
+
+#[cfg(c_hotspots_available)]
+#[repr(C)]
+#[derive(Debug)]
+pub struct MeshAttributesResult {
+    pub normals: *mut f32,
+    pub tangents: *mut f32,
+    pub vertex_count: usize,
+    pub success: i32,
+    pub error_message: [u8; 256],
+}
+
+#[cfg(c_hotspots_available)]
+#[repr(C)]
+#[derive(Debug)]
+pub struct ObjParseResult {
+    pub vertices: *mut f32,
+    pub vertex_count: usize,
+
+    pub normals: *mut f32,
+    pub normal_count: usize,
+
+    pub texcoords: *mut f32,
+    pub texcoord_count: usize,
+
+    pub indices: *mut u32,
+    pub index_count: usize,
+
+    pub object_name: *mut core::ffi::c_char,
+    pub object_name_len: usize,
+
+    pub success: i32,
+    pub error_message: [u8; 256],
+}
+
+pub mod mesh_obj {
+    use super::*;
+
+    pub fn parse_obj_to_mesh(data: &[u8], use_c_hotspots: bool) -> PixieResult<(String, Vec<f32>, Vec<f32>, Vec<f32>, Vec<u32>)> {
+        if !use_c_hotspots {
+            return Err(PixieError::CHotspotUnavailable(String::from("C hotspots disabled")));
+        }
+
+        #[cfg(c_hotspots_available)]
+        {
+            let result_ptr = unsafe { obj_parse_to_mesh(data.as_ptr(), data.len()) };
+            if result_ptr.is_null() {
+                return Err(PixieError::CHotspotFailed(String::from("OBJ hotspot returned null")));
+            }
+
+            let result = unsafe { &*result_ptr };
+            if result.success == 0 {
+                let error_msg = core::str::from_utf8(&result.error_message)
+                    .unwrap_or("Unknown error")
+                    .trim_end_matches('\0');
+                unsafe { free_obj_parse_result(result_ptr) };
+                return Err(PixieError::CHotspotFailed(format!("OBJ hotspot failed: {}", error_msg)));
+            }
+
+            let vertices = if !result.vertices.is_null() && result.vertex_count > 0 {
+                unsafe { core::slice::from_raw_parts(result.vertices, result.vertex_count * 3) }.to_vec()
+            } else {
+                Vec::new()
+            };
+
+            let normals = if !result.normals.is_null() && result.normal_count > 0 {
+                unsafe { core::slice::from_raw_parts(result.normals, result.normal_count * 3) }.to_vec()
+            } else {
+                Vec::new()
+            };
+
+            let texcoords = if !result.texcoords.is_null() && result.texcoord_count > 0 {
+                unsafe { core::slice::from_raw_parts(result.texcoords, result.texcoord_count * 2) }.to_vec()
+            } else {
+                Vec::new()
+            };
+
+            let indices = if !result.indices.is_null() && result.index_count > 0 {
+                unsafe { core::slice::from_raw_parts(result.indices, result.index_count) }.to_vec()
+            } else {
+                Vec::new()
+            };
+
+            let object_name = if !result.object_name.is_null() && result.object_name_len > 0 {
+                let name_bytes = unsafe {
+                    core::slice::from_raw_parts(result.object_name as *const u8, result.object_name_len)
+                };
+                core::str::from_utf8(name_bytes)
+                    .unwrap_or("optimized_mesh")
+                    .to_string()
+            } else {
+                String::from("optimized_mesh")
+            };
+
+            unsafe { free_obj_parse_result(result_ptr) };
+            return Ok((object_name, vertices, normals, texcoords, indices));
+        }
+
+        #[cfg(not(c_hotspots_available))]
+        {
+            Err(PixieError::CHotspotUnavailable(String::from("C hotspots not available")))
+        }
+    }
 }
 
 #[cfg(c_hotspots_available)]
@@ -131,36 +294,42 @@ pub mod util {
         }
         Ok(())
     }
+
+    pub fn ply_find_end_header(data: &[u8]) -> Option<usize> {
+        let mut end_pos: usize = 0;
+        let status = unsafe { super::ply_find_end_header(data.as_ptr(), data.len(), &mut end_pos as *mut _) };
+        if status == 0 && end_pos > 0 && end_pos <= data.len() {
+            Some(end_pos)
+        } else {
+            None
+        }
+    }
+
+    pub fn normalize_text_whitespace_commas(data: &[u8]) -> Option<Vec<u8>> {
+        let mut out_len: usize = 0;
+        let ptr = unsafe { super::normalize_text_whitespace_commas(data.as_ptr(), data.len(), &mut out_len as *mut _) };
+        if ptr.is_null() || out_len == 0 {
+            return None;
+        }
+
+        let out = unsafe { core::slice::from_raw_parts(ptr, out_len) }.to_vec();
+        unsafe { super::hotspot_free(ptr as *mut core::ffi::c_void) };
+        Some(out)
+    }
 }
 
 #[cfg(not(c_hotspots_available))]
 pub mod util {
-    use alloc::{vec, vec::Vec, string::{String, ToString}};
-    
-    pub fn create_buffer(initial_capacity: usize) -> *mut core::ffi::c_void {
-        let buffer = vec![0u8; initial_capacity];
-        let boxed = alloc::boxed::Box::new(buffer);
-        alloc::boxed::Box::into_raw(boxed) as *mut core::ffi::c_void
+    use alloc::string::String;
+
+    pub fn create_buffer(_initial_capacity: usize) -> *mut core::ffi::c_void {
+        core::ptr::null_mut()
     }
-    
-    pub fn destroy_buffer(buffer: *mut core::ffi::c_void) {
-        if !buffer.is_null() {
-            unsafe {
-                let _ = alloc::boxed::Box::from_raw(buffer as *mut Vec<u8>);
-            }
-        }
-    }
-    
-    pub fn append_to_buffer(buffer: *mut core::ffi::c_void, data: &[u8]) -> Result<(), String> {
-        if buffer.is_null() {
-            return Err("Null buffer".to_string());
-        }
-        
-        unsafe {
-            let vec_ref = &mut *(buffer as *mut Vec<u8>);
-            vec_ref.extend_from_slice(data);
-        }
-        Ok(())
+
+    pub fn destroy_buffer(_buffer: *mut core::ffi::c_void) {}
+
+    pub fn append_to_buffer(_buffer: *mut core::ffi::c_void, _data: &[u8]) -> Result<(), String> {
+        Err(String::from("C hotspots unavailable"))
     }
 }
 
@@ -589,11 +758,123 @@ pub mod image {
     }
     
     pub fn rgb_to_yuv_simd(rgb_data: &[u8], yuv_data: &mut [u8]) {
-        rgb_to_yuv_rust_fallback(rgb_data, yuv_data);
+        #[cfg(c_hotspots_available)]
+        {
+            if rgb_data.len() % 3 != 0 || yuv_data.len() < rgb_data.len() {
+                rgb_to_yuv_rust_fallback(rgb_data, yuv_data);
+                return;
+            }
+            let pixel_count = rgb_data.len() / 3;
+            unsafe {
+                rgb_to_yuv(rgb_data.as_ptr(), yuv_data.as_mut_ptr(), pixel_count);
+            }
+            return;
+        }
+
+        #[cfg(not(c_hotspots_available))]
+        {
+            rgb_to_yuv_rust_fallback(rgb_data, yuv_data);
+        }
     }
     
     pub fn yuv_to_rgb_simd(yuv_data: &[u8], rgb_data: &mut [u8]) {
-        yuv_to_rgb_rust_fallback(yuv_data, rgb_data);
+        #[cfg(c_hotspots_available)]
+        {
+            if yuv_data.len() % 3 != 0 || rgb_data.len() < yuv_data.len() {
+                yuv_to_rgb_rust_fallback(yuv_data, rgb_data);
+                return;
+            }
+            let pixel_count = yuv_data.len() / 3;
+            unsafe {
+                yuv_to_rgb(yuv_data.as_ptr(), rgb_data.as_mut_ptr(), pixel_count);
+            }
+            return;
+        }
+
+        #[cfg(not(c_hotspots_available))]
+        {
+            yuv_to_rgb_rust_fallback(yuv_data, rgb_data);
+        }
+    }
+
+    pub fn rgba_yuv_roundtrip_inplace_simd(rgba_data: &mut [u8]) {
+        #[cfg(c_hotspots_available)]
+        {
+            if rgba_data.len() % 4 != 0 {
+                rgba_yuv_roundtrip_rust_fallback(rgba_data);
+                return;
+            }
+            let pixel_count = rgba_data.len() / 4;
+            unsafe {
+                rgba_yuv_roundtrip_inplace(rgba_data.as_mut_ptr(), pixel_count);
+            }
+            return;
+        }
+
+        #[cfg(not(c_hotspots_available))]
+        {
+            rgba_yuv_roundtrip_rust_fallback(rgba_data);
+        }
+    }
+
+    pub fn quantize_rgb_bitshift_hotspot(rgb_in: &[u8], rgb_out: &mut [u8], bit_shift: u8) {
+        #[cfg(c_hotspots_available)]
+        {
+            if rgb_in.len() % 3 != 0 || rgb_out.len() < rgb_in.len() {
+                quantize_rgb_bitshift_rust_fallback(rgb_in, rgb_out, bit_shift);
+                return;
+            }
+            let pixel_count = rgb_in.len() / 3;
+            unsafe {
+                quantize_rgb_bitshift(rgb_in.as_ptr(), rgb_out.as_mut_ptr(), pixel_count, bit_shift);
+            }
+            return;
+        }
+
+        #[cfg(not(c_hotspots_available))]
+        {
+            quantize_rgb_bitshift_rust_fallback(rgb_in, rgb_out, bit_shift);
+        }
+    }
+
+    pub fn palette_indices_to_rgba_hotspot(
+        indices: &[u8],
+        palette: &[Color32],
+        rgba_out: &mut [u8],
+        default_color: Color32,
+    ) {
+        if rgba_out.len() < indices.len() * 4 {
+            palette_indices_to_rgba_rust_fallback(indices, palette, rgba_out, default_color);
+            return;
+        }
+
+        #[cfg(c_hotspots_available)]
+        {
+            if palette.is_empty() {
+                palette_indices_to_rgba_rust_fallback(indices, palette, rgba_out, default_color);
+                return;
+            }
+
+            unsafe {
+                palette_indices_to_rgba(
+                    indices.as_ptr(),
+                    indices.len(),
+                    palette.as_ptr(),
+                    palette.len(),
+                    rgba_out.as_mut_ptr(),
+                    default_color.r,
+                    default_color.g,
+                    default_color.b,
+                    default_color.a,
+                );
+            }
+            return;
+        }
+
+        #[cfg(not(c_hotspots_available))]
+        {
+            palette_indices_to_rgba_rust_fallback(indices, palette, rgba_out, default_color);
+        }
     }
     
     fn octree_quantization_rust_fallback(rgba_data: &[u8], width: usize, height: usize, max_colors: usize) -> PixieResult<(Vec<Color32>, Vec<u8>)> {
@@ -797,6 +1078,73 @@ pub mod image {
             closest
         }
     }
+
+    fn rgba_yuv_roundtrip_rust_fallback(rgba_data: &mut [u8]) {
+        if rgba_data.len() % 4 != 0 {
+            return;
+        }
+
+        let pixel_count = rgba_data.len() / 4;
+        let mut rgb_data = Vec::with_capacity(pixel_count * 3);
+        let mut yuv_data = vec![0u8; pixel_count * 3];
+
+        for i in 0..pixel_count {
+            let base_idx = i * 4;
+            rgb_data.push(rgba_data[base_idx]);
+            rgb_data.push(rgba_data[base_idx + 1]);
+            rgb_data.push(rgba_data[base_idx + 2]);
+        }
+
+        rgb_to_yuv_rust_fallback(&rgb_data, &mut yuv_data);
+        yuv_to_rgb_rust_fallback(&yuv_data, &mut rgb_data);
+
+        for i in 0..pixel_count {
+            let rgba_idx = i * 4;
+            let rgb_idx = i * 3;
+            rgba_data[rgba_idx] = rgb_data[rgb_idx];
+            rgba_data[rgba_idx + 1] = rgb_data[rgb_idx + 1];
+            rgba_data[rgba_idx + 2] = rgb_data[rgb_idx + 2];
+        }
+    }
+
+    fn quantize_rgb_bitshift_rust_fallback(rgb_in: &[u8], rgb_out: &mut [u8], bit_shift: u8) {
+        if rgb_in.len() % 3 != 0 || rgb_out.len() < rgb_in.len() {
+            return;
+        }
+        let shift = core::cmp::min(bit_shift, 7);
+        let mask = 0xFFu8 << shift;
+        let pixel_count = rgb_in.len() / 3;
+        for i in 0..pixel_count {
+            let r = rgb_in[i * 3 + 0];
+            let g = rgb_in[i * 3 + 1];
+            let b = rgb_in[i * 3 + 2];
+            rgb_out[i * 3 + 0] = r & mask;
+            rgb_out[i * 3 + 1] = g & mask;
+            rgb_out[i * 3 + 2] = b & mask;
+        }
+    }
+
+    fn palette_indices_to_rgba_rust_fallback(indices: &[u8], palette: &[Color32], rgba_out: &mut [u8], default_color: Color32) {
+        if rgba_out.len() < indices.len() * 4 {
+            return;
+        }
+
+        for (i, &idx) in indices.iter().enumerate() {
+            let base = i * 4;
+            if (idx as usize) < palette.len() {
+                let c = palette[idx as usize];
+                rgba_out[base] = c.r;
+                rgba_out[base + 1] = c.g;
+                rgba_out[base + 2] = c.b;
+                rgba_out[base + 3] = c.a;
+            } else {
+                rgba_out[base] = default_color.r;
+                rgba_out[base + 1] = default_color.g;
+                rgba_out[base + 2] = default_color.b;
+                rgba_out[base + 3] = default_color.a;
+            }
+        }
+    }
 }
 
 #[cfg(c_hotspots_available)]
@@ -815,7 +1163,7 @@ pub mod mesh {
         let result = unsafe {
             decimate_mesh_qem(
                 vertices.as_ptr(),
-                vertices.len(),
+                vertices.len() / 3,
                 indices.as_ptr(),
                 indices.len(),
                 target_ratio
@@ -840,8 +1188,9 @@ pub mod mesh {
         }
         
         let new_vertices = unsafe {
-            core::slice::from_raw_parts(result.vertices, result.vertex_count)
-        }.to_vec();
+            core::slice::from_raw_parts(result.vertices, result.vertex_count * 3)
+        }
+        .to_vec();
         
         let new_indices = unsafe {
             core::slice::from_raw_parts(result.indices, result.index_count)
@@ -865,7 +1214,7 @@ pub mod mesh {
         let result = unsafe {
             weld_vertices_spatial(
                 vertices.as_ptr(),
-                vertices.len(),
+                vertices.len() / 3,
                 indices.as_ptr(),
                 indices.len(),
                 tolerance
@@ -886,8 +1235,9 @@ pub mod mesh {
         }
         
         let new_vertices = unsafe {
-            core::slice::from_raw_parts(result.vertices, result.vertex_count)
-        }.to_vec();
+            core::slice::from_raw_parts(result.vertices, result.vertex_count * 3)
+        }
+        .to_vec();
         
         let new_indices = unsafe {
             core::slice::from_raw_parts(result.indices, result.index_count)
@@ -898,6 +1248,244 @@ pub mod mesh {
         }
         
         Ok((new_vertices, new_indices))
+    }
+}
+
+pub mod mesh_attributes {
+    use super::*;
+
+    pub fn generate_normals(vertices: &[f32], indices: &[u32], use_c_hotspots: bool) -> PixieResult<Vec<f32>> {
+        if vertices.len() % 3 != 0 {
+            return Err(PixieError::InvalidInput(String::from("Vertices must be float3 array")));
+        }
+        if indices.len() % 3 != 0 {
+            return Err(PixieError::InvalidInput(String::from("Indices must be triangle list")));
+        }
+        let vertex_count = vertices.len() / 3;
+
+        if use_c_hotspots {
+            #[cfg(c_hotspots_available)]
+            {
+                let start_time = crate::get_current_time_ms();
+                let data_size = vertices.len() * 4 + indices.len() * 4;
+
+                let mut result = unsafe {
+                    compute_mesh_attributes(
+                        vertices.as_ptr(),
+                        vertex_count,
+                        indices.as_ptr(),
+                        indices.len(),
+                        core::ptr::null(),
+                        0,
+                        0,
+                    )
+                };
+
+                let elapsed = crate::get_current_time_ms() - start_time;
+                crate::update_performance_stats(false, elapsed, data_size);
+
+                if result.success == 0 || result.normals.is_null() {
+                    use crate::optimizers::ERRORS_COUNT;
+                    ERRORS_COUNT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+
+                    let error_msg = core::str::from_utf8(&result.error_message)
+                        .unwrap_or("Unknown error")
+                        .trim_end_matches('\0');
+                    return Err(PixieError::CHotspotFailed(format!("Mesh normals failed: {}", error_msg)));
+                }
+
+                let out = unsafe { core::slice::from_raw_parts(result.normals, vertex_count * 3) }.to_vec();
+                unsafe { free_mesh_attributes_result(&mut result as *mut _); }
+                return Ok(out);
+            }
+        }
+
+        Ok(generate_normals_rust(vertices, indices))
+    }
+
+    pub fn generate_tangents(
+        vertices: &[f32],
+        indices: &[u32],
+        uvs: &[f32],
+        use_c_hotspots: bool,
+    ) -> PixieResult<Vec<f32>> {
+        if vertices.len() % 3 != 0 {
+            return Err(PixieError::InvalidInput(String::from("Vertices must be float3 array")));
+        }
+        if indices.len() % 3 != 0 {
+            return Err(PixieError::InvalidInput(String::from("Indices must be triangle list")));
+        }
+        let vertex_count = vertices.len() / 3;
+        if uvs.len() != vertex_count * 2 {
+            return Err(PixieError::InvalidInput(String::from(
+                "UVs must be float2 per vertex",
+            )));
+        }
+
+        if use_c_hotspots {
+            #[cfg(c_hotspots_available)]
+            {
+                let start_time = crate::get_current_time_ms();
+                let data_size = vertices.len() * 4 + indices.len() * 4 + uvs.len() * 4;
+
+                let mut result = unsafe {
+                    compute_mesh_attributes(
+                        vertices.as_ptr(),
+                        vertex_count,
+                        indices.as_ptr(),
+                        indices.len(),
+                        uvs.as_ptr(),
+                        vertex_count,
+                        1,
+                    )
+                };
+
+                let elapsed = crate::get_current_time_ms() - start_time;
+                crate::update_performance_stats(false, elapsed, data_size);
+
+                if result.success == 0 || result.tangents.is_null() {
+                    use crate::optimizers::ERRORS_COUNT;
+                    ERRORS_COUNT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+
+                    let error_msg = core::str::from_utf8(&result.error_message)
+                        .unwrap_or("Unknown error")
+                        .trim_end_matches('\0');
+                    return Err(PixieError::CHotspotFailed(format!(
+                        "Mesh tangents failed: {}",
+                        error_msg
+                    )));
+                }
+
+                let out = unsafe {
+                    core::slice::from_raw_parts(result.tangents, vertex_count * 4)
+                }
+                .to_vec();
+                unsafe { free_mesh_attributes_result(&mut result as *mut _) };
+                return Ok(out);
+            }
+        }
+
+        Err(PixieError::CHotspotUnavailable(String::from(
+            "Tangent generation requires C hotspots",
+        )))
+    }
+
+    fn generate_normals_rust(vertices: &[f32], indices: &[u32]) -> Vec<f32> {
+        let mut normals = vec![0.0f32; vertices.len()];
+
+        for tri in indices.chunks(3) {
+            if tri.len() != 3 {
+                continue;
+            }
+            let i0 = tri[0] as usize;
+            let i1 = tri[1] as usize;
+            let i2 = tri[2] as usize;
+            if i0 * 3 + 2 >= vertices.len() || i1 * 3 + 2 >= vertices.len() || i2 * 3 + 2 >= vertices.len() {
+                continue;
+            }
+
+            let v0 = [vertices[i0 * 3], vertices[i0 * 3 + 1], vertices[i0 * 3 + 2]];
+            let v1 = [vertices[i1 * 3], vertices[i1 * 3 + 1], vertices[i1 * 3 + 2]];
+            let v2 = [vertices[i2 * 3], vertices[i2 * 3 + 1], vertices[i2 * 3 + 2]];
+
+            let e1 = [v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2]];
+            let e2 = [v2[0] - v0[0], v2[1] - v0[1], v2[2] - v0[2]];
+
+            let n = [
+                e1[1] * e2[2] - e1[2] * e2[1],
+                e1[2] * e2[0] - e1[0] * e2[2],
+                e1[0] * e2[1] - e1[1] * e2[0],
+            ];
+
+            for &idx in tri {
+                let base = idx as usize * 3;
+                if base + 2 < normals.len() {
+                    normals[base] += n[0];
+                    normals[base + 1] += n[1];
+                    normals[base + 2] += n[2];
+                }
+            }
+        }
+
+        for chunk in normals.chunks_mut(3) {
+            if chunk.len() != 3 {
+                continue;
+            }
+            let len2 = chunk[0] * chunk[0] + chunk[1] * chunk[1] + chunk[2] * chunk[2];
+            if len2 > 1e-20 {
+                let inv = 1.0 / len2.sqrt();
+                chunk[0] *= inv;
+                chunk[1] *= inv;
+                chunk[2] *= inv;
+            }
+        }
+
+        normals
+    }
+}
+
+pub mod vertex_cache {
+    use super::*;
+
+    pub fn optimize_indices_forsyth(
+        vertex_count: usize,
+        indices: &[u32],
+        use_c_hotspots: bool,
+    ) -> PixieResult<Vec<u32>> {
+        if indices.len() % 3 != 0 {
+            return Err(PixieError::InvalidInput(String::from(
+                "Indices must be triangle list",
+            )));
+        }
+
+        if !use_c_hotspots {
+            return Err(PixieError::CHotspotUnavailable(String::from(
+                "C hotspots disabled",
+            )));
+        }
+
+        #[cfg(c_hotspots_available)]
+        {
+            let start_time = crate::get_current_time_ms();
+            let data_size = indices.len() * 4;
+
+            let mut result = unsafe {
+                optimize_vertex_cache_forsyth(
+                    indices.as_ptr(),
+                    indices.len(),
+                    vertex_count,
+                    32,
+                )
+            };
+
+            let elapsed = crate::get_current_time_ms() - start_time;
+            crate::update_performance_stats(false, elapsed, data_size);
+
+            if result.success == 0 || result.indices.is_null() {
+                use crate::optimizers::ERRORS_COUNT;
+                ERRORS_COUNT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+
+                let error_msg = core::str::from_utf8(&result.error_message)
+                    .unwrap_or("Unknown error")
+                    .trim_end_matches('\0');
+                return Err(PixieError::CHotspotFailed(format!(
+                    "Vertex cache optimization failed: {}",
+                    error_msg
+                )));
+            }
+
+            let out = unsafe { core::slice::from_raw_parts(result.indices, result.index_count) }
+                .to_vec();
+            unsafe { free_vertex_cache_result(&mut result as *mut _) };
+            return Ok(out);
+        }
+
+        #[cfg(not(c_hotspots_available))]
+        {
+            Err(PixieError::CHotspotUnavailable(String::from(
+                "C hotspots not available",
+            )))
+        }
     }
 }
 
@@ -921,9 +1509,7 @@ pub fn svg_text_compress(data: &[u8]) -> PixieResult<Vec<u8>> {
             let result_data = unsafe { 
                 core::slice::from_raw_parts(result, output_size).to_vec()
             };
-            unsafe {
-                // Note: We would need a free function from C, but for now assume it's handled
-            }
+            unsafe { hotspot_free(result as *mut core::ffi::c_void) };
             Ok(result_data)
         } else {
             Err(PixieError::OptimizationFailed(format!("SVG text compression returned null")))
@@ -1009,6 +1595,7 @@ pub fn svg_optimize_paths_c(data: &[u8]) -> PixieResult<Vec<u8>> {
             let result_data = unsafe { 
                 core::slice::from_raw_parts(result, output_size).to_vec()
             };
+            unsafe { hotspot_free(result as *mut core::ffi::c_void) };
             Ok(result_data)
         } else {
             Err(PixieError::OptimizationFailed(format!("SVG path optimization returned null")))
@@ -1039,6 +1626,7 @@ pub fn ico_optimize_embedded_c(data: &[u8], quality: u8) -> PixieResult<Vec<u8>>
             let result_data = unsafe { 
                 core::slice::from_raw_parts(result, output_size).to_vec()
             };
+            unsafe { hotspot_free(result as *mut core::ffi::c_void) };
             Ok(result_data)
         } else {
             Err(PixieError::OptimizationFailed(format!("ICO embedded optimization returned null")))
@@ -1068,6 +1656,7 @@ pub fn ico_strip_metadata_c(data: &[u8]) -> PixieResult<Vec<u8>> {
             let result_data = unsafe { 
                 core::slice::from_raw_parts(result, output_size).to_vec()
             };
+            unsafe { hotspot_free(result as *mut core::ffi::c_void) };
             Ok(result_data)
         } else {
             Err(PixieError::OptimizationFailed(format!("ICO metadata stripping returned null")))
@@ -1102,6 +1691,7 @@ pub fn ico_compress_directory_c(data: &[u8]) -> PixieResult<Vec<u8>> {
             let result_data = unsafe { 
                 core::slice::from_raw_parts(result, output_size).to_vec()
             };
+            unsafe { hotspot_free(result as *mut core::ffi::c_void) };
             Ok(result_data)
         } else {
             Err(PixieError::OptimizationFailed(format!("ICO directory compression returned null")))
@@ -1602,6 +2192,117 @@ pub mod fallback {
 
 pub fn are_c_hotspots_available() -> bool {
     cfg!(c_hotspots_available)
+}
+
+#[cfg(c_hotspots_available)]
+pub mod color {
+    use super::*;
+    
+    pub fn perceptual_distance(r1: u8, g1: u8, b1: u8, r2: u8, g2: u8, b2: u8) -> f32 {
+        unsafe { color_distance_perceptual(r1, g1, b1, r2, g2, b2) }
+    }
+    
+    pub fn rgb_to_linear(rgb: &[u8], linear: &mut [f32]) -> PixieResult<()> {
+        if rgb.len() / 3 != linear.len() / 3 {
+            return Err(PixieError::InvalidInput("RGB and linear buffer size mismatch".into()));
+        }
+        let count = (rgb.len() / 3) as u32;
+        unsafe { rgb_to_linear_batch(rgb.as_ptr(), linear.as_mut_ptr(), count); }
+        Ok(())
+    }
+    
+    pub fn linear_to_rgb(linear: &[f32], rgb: &mut [u8]) -> PixieResult<()> {
+        if linear.len() / 3 != rgb.len() / 3 {
+            return Err(PixieError::InvalidInput("Linear and RGB buffer size mismatch".into()));
+        }
+        let count = (linear.len() / 3) as u32;
+        unsafe { linear_to_rgb_batch(linear.as_ptr(), rgb.as_mut_ptr(), count); }
+        Ok(())
+    }
+    
+    pub fn rgb_to_linear_simd(rgb: &[u8], linear: &mut [f32]) -> PixieResult<()> {
+        if rgb.len() / 3 != linear.len() / 3 {
+            return Err(PixieError::InvalidInput("RGB and linear buffer size mismatch".into()));
+        }
+        let count = (rgb.len() / 3) as u32;
+        unsafe { rgb_to_linear_batch_simd(rgb.as_ptr(), linear.as_mut_ptr(), count); }
+        Ok(())
+    }
+    
+    pub fn find_closest_palette_color(palette: &[u8], r: u8, g: u8, b: u8) -> PixieResult<usize> {
+        if palette.len() % 3 != 0 {
+            return Err(PixieError::InvalidInput("Palette size must be multiple of 3".into()));
+        }
+        let palette_size = (palette.len() / 3) as u32;
+        let idx = unsafe { find_closest_color(palette.as_ptr(), palette_size, r, g, b) };
+        Ok(idx as usize)
+    }
+    
+    pub fn min_palette_distance(palette: &[u8], r: u8, g: u8, b: u8) -> PixieResult<f32> {
+        if palette.len() % 3 != 0 {
+            return Err(PixieError::InvalidInput("Palette size must be multiple of 3".into()));
+        }
+        let palette_size = (palette.len() / 3) as u32;
+        let dist = unsafe { color_distance_batch_min(palette.as_ptr(), palette_size, r, g, b) };
+        Ok(dist)
+    }
+}
+
+#[cfg(not(c_hotspots_available))]
+pub mod color {
+    use super::*;
+    
+    pub fn perceptual_distance(r1: u8, g1: u8, b1: u8, r2: u8, g2: u8, b2: u8) -> f32 {
+        let dr = (r1 as f32 - r2 as f32) / 255.0;
+        let dg = (g1 as f32 - g2 as f32) / 255.0;
+        let db = (b1 as f32 - b2 as f32) / 255.0;
+        dr*dr*0.299 + dg*dg*0.587 + db*db*0.114
+    }
+    
+    pub fn rgb_to_linear(rgb: &[u8], linear: &mut [f32]) -> PixieResult<()> {
+        for i in 0..rgb.len() {
+            let v = rgb[i] as f32 / 255.0;
+            linear[i] = if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) };
+        }
+        Ok(())
+    }
+    
+    pub fn linear_to_rgb(linear: &[f32], rgb: &mut [u8]) -> PixieResult<()> {
+        for i in 0..linear.len() {
+            let v = linear[i];
+            let srgb = if v <= 0.0031308 { v * 12.92 } else { 1.055 * v.powf(1.0/2.4) - 0.055 };
+            rgb[i] = (srgb * 255.0).clamp(0.0, 255.0) as u8;
+        }
+        Ok(())
+    }
+    
+    pub fn rgb_to_linear_simd(rgb: &[u8], linear: &mut [f32]) -> PixieResult<()> {
+        rgb_to_linear(rgb, linear)
+    }
+    
+    pub fn find_closest_palette_color(palette: &[u8], r: u8, g: u8, b: u8) -> PixieResult<usize> {
+        let mut best_idx = 0;
+        let mut best_dist = f32::MAX;
+        for i in 0..(palette.len() / 3) {
+            let dist = perceptual_distance(r, g, b, palette[i*3], palette[i*3+1], palette[i*3+2]);
+            if dist < best_dist {
+                best_dist = dist;
+                best_idx = i;
+            }
+        }
+        Ok(best_idx)
+    }
+    
+    pub fn min_palette_distance(palette: &[u8], r: u8, g: u8, b: u8) -> PixieResult<f32> {
+        let mut min_dist = f32::MAX;
+        for i in 0..(palette.len() / 3) {
+            let dist = perceptual_distance(r, g, b, palette[i*3], palette[i*3+1], palette[i*3+2]);
+            if dist < min_dist {
+                min_dist = dist;
+            }
+        }
+        Ok(min_dist)
+    }
 }
 
 pub fn c_hotspots_info() -> &'static str {

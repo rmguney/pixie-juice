@@ -47,22 +47,32 @@ fn is_binary_ply(data: &[u8]) -> bool {
 
 fn optimize_binary_ply(data: &[u8], config: &MeshOptConfig) -> OptResult<Vec<u8>> {
     let mut header_end = 0;
-    if let Ok(text) = core::str::from_utf8(data) {
-        if let Some(pos) = text.find("end_header") {
-            let end_header_line_end = text[pos..].find('\n').unwrap_or(0);
-            header_end = pos + end_header_line_end + 1;
+
+    #[cfg(c_hotspots_available)]
+    if config.use_c_hotspots {
+        if let Some(pos) = crate::c_hotspots::util::ply_find_end_header(data) {
+            header_end = pos;
         }
-    } else {
-        let end_header_bytes = b"end_header";
-        for i in 0..data.len().saturating_sub(end_header_bytes.len()) {
-            if &data[i..i + end_header_bytes.len()] == end_header_bytes {
-                for j in i + end_header_bytes.len()..data.len() {
-                    if data[j] == b'\n' {
-                        header_end = j + 1;
-                        break;
+    }
+
+    if header_end == 0 {
+        if let Ok(text) = core::str::from_utf8(data) {
+            if let Some(pos) = text.find("end_header") {
+                let end_header_line_end = text[pos..].find('\n').unwrap_or(0);
+                header_end = pos + end_header_line_end + 1;
+            }
+        } else {
+            let end_header_bytes = b"end_header";
+            for i in 0..data.len().saturating_sub(end_header_bytes.len()) {
+                if &data[i..i + end_header_bytes.len()] == end_header_bytes {
+                    for j in i + end_header_bytes.len()..data.len() {
+                        if data[j] == b'\n' {
+                            header_end = j + 1;
+                            break;
+                        }
                     }
+                    break;
                 }
-                break;
             }
         }
     }

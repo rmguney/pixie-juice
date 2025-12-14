@@ -45,7 +45,27 @@ fn optimize_binary_stl_basic(data: &[u8], config: &MeshOptConfig, _start_time: f
 }
 
 fn optimize_ascii_stl_text(data: &[u8], config: &MeshOptConfig, _start_time: f64, _data_size: usize) -> OptResult<Vec<u8>> {
-    let content = core::str::from_utf8(data)
+    let normalized = {
+        #[cfg(c_hotspots_available)]
+        {
+            if config.target_ratio < 1.0 {
+                if let Some(out) = crate::c_hotspots::util::normalize_text_whitespace_commas(data) {
+                    out
+                } else {
+                    data.to_vec()
+                }
+            } else {
+                data.to_vec()
+            }
+        }
+
+        #[cfg(not(c_hotspots_available))]
+        {
+            data.to_vec()
+        }
+    };
+
+    let content = core::str::from_utf8(&normalized)
         .map_err(|_| OptError::InvalidFormat("STL file contains invalid UTF-8".to_string()))?;
     
     let lines: Vec<&str> = content.lines().collect();

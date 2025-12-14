@@ -287,6 +287,120 @@ void quicksort_float(float* array, size_t size) {
     }
 }
 
+WASM_EXPORT int ply_find_end_header(const uint8_t* data, size_t data_len, size_t* header_end) {
+    if (!data || data_len == 0 || !header_end) {
+        return 1;
+    }
+
+    const uint8_t needle[] = { 'e','n','d','_','h','e','a','d','e','r' };
+    const size_t needle_len = sizeof(needle);
+
+    if (data_len < needle_len) {
+        return 1;
+    }
+
+    for (size_t i = 0; i + needle_len <= data_len; i++) {
+        if (data[i] != (uint8_t)'e') {
+            continue;
+        }
+
+        if (memcmp(&data[i], needle, needle_len) == 0) {
+            size_t j = i + needle_len;
+            while (j < data_len) {
+                if (data[j] == (uint8_t)'\n') {
+                    *header_end = j + 1;
+                    return 0;
+                }
+                j++;
+            }
+            return 1;
+        }
+    }
+
+    return 1;
+}
+
+static int is_ws(uint8_t c) {
+    return c == (uint8_t)' ' || c == (uint8_t)'\t' || c == (uint8_t)'\r' || c == (uint8_t)'\n';
+}
+
+WASM_EXPORT uint8_t* normalize_text_whitespace_commas(const uint8_t* input, size_t input_size, size_t* output_size) {
+    if (!output_size) {
+        return NULL;
+    }
+    *output_size = 0;
+    if (!input || input_size == 0) {
+        return NULL;
+    }
+
+    uint8_t* out = (uint8_t*)wasm_malloc(input_size + 1);
+    if (!out) {
+        return NULL;
+    }
+
+    size_t o = 0;
+    int at_line_start = 1;
+    int pending_space = 0;
+    int after_comma = 0;
+
+    for (size_t i = 0; i < input_size; i++) {
+        uint8_t c = input[i];
+
+        if (c == (uint8_t)'\r') {
+            continue;
+        }
+
+        if (c == (uint8_t)'\n') {
+            while (o > 0 && out[o - 1] == (uint8_t)' ') {
+                o--;
+            }
+            out[o++] = (uint8_t)'\n';
+            at_line_start = 1;
+            pending_space = 0;
+            after_comma = 0;
+            continue;
+        }
+
+        if (c == (uint8_t)',') {
+            while (o > 0 && out[o - 1] == (uint8_t)' ') {
+                o--;
+            }
+            out[o++] = (uint8_t)',';
+            at_line_start = 0;
+            pending_space = 0;
+            after_comma = 1;
+            continue;
+        }
+
+        if (is_ws(c)) {
+            if (at_line_start) {
+                continue;
+            }
+            if (after_comma) {
+                continue;
+            }
+            pending_space = 1;
+            continue;
+        }
+
+        if (pending_space) {
+            out[o++] = (uint8_t)' ';
+            pending_space = 0;
+        }
+        out[o++] = c;
+        at_line_start = 0;
+        after_comma = 0;
+    }
+
+    while (o > 0 && (out[o - 1] == (uint8_t)' ' || out[o - 1] == (uint8_t)'\n')) {
+        o--;
+    }
+
+    out[o] = 0;
+    *output_size = o;
+    return out;
+}
+
 int count_set_bits(uint32_t n) {
     int count = 0;
     while (n) {
@@ -357,11 +471,10 @@ void start_timer(void) {
 double get_elapsed_time_ms(void) {
     // Return elapsed time in milliseconds
     // This is a placeholder - actual implementation would use
-    // imported JavaScript performance.now() function
-    return 0.0; // Simplified for WASM-only build
+    return 0.0;
 }
 
-+int safe_add_size_t(size_t a, size_t b, size_t* result) {
+int safe_add_size_t(size_t a, size_t b, size_t* result) {
     if (!result) return 0;
     
     if (a > SIZE_MAX - b) return 0;
@@ -636,4 +749,10 @@ uint8_t* ico_compress_directory(const uint8_t* data, size_t data_len, uint32_t c
     memcpy_simd(output, data, data_len);
     *output_size = data_len;
     return output;
+}
+
+WASM_EXPORT void hotspot_free(void* ptr) {
+    if (ptr) {
+        wasm_free(ptr);
+    }
 }

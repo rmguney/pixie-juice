@@ -9,69 +9,78 @@ pub fn optimize_obj(data: &[u8], config: &MeshOptConfig) -> OptResult<Vec<u8>> {
 }
 
 fn optimize_obj_advanced_text(data: &[u8], config: &MeshOptConfig) -> OptResult<Vec<u8>> {
+    #[cfg(c_hotspots_available)]
+    if config.use_c_hotspots && data.len() >= 16 * 1024 {
+        if let Ok((object_name, vertices, normals, texcoords, faces)) = crate::c_hotspots::mesh_obj::parse_obj_to_mesh(data, true) {
+            return optimize_obj_from_parsed(object_name, vertices, normals, texcoords, faces, config);
+        }
+    }
+
     let content = core::str::from_utf8(data)
         .map_err(|_| OptError::InvalidFormat("Invalid UTF-8 in OBJ file".to_string()))?;
-    
+
+    let (object_name, vertices, normals, texcoords, faces) = parse_obj_fallback(content);
+    optimize_obj_from_parsed(object_name, vertices, normals, texcoords, faces, config)
+}
+
+fn parse_obj_fallback(content: &str) -> (String, Vec<f32>, Vec<f32>, Vec<f32>, Vec<u32>) {
     let mut vertices = Vec::new();
     let mut normals = Vec::new();
     let mut texcoords = Vec::new();
     let mut faces = Vec::new();
     let mut object_name = String::from("optimized_mesh");
-    
+
     for line in content.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() || trimmed.starts_with('#') {
             continue;
         }
-        
+
         let parts: Vec<&str> = trimmed.split_whitespace().collect();
         if parts.is_empty() {
             continue;
         }
-        
+
         match parts[0] {
             "o" => {
                 if parts.len() > 1 {
                     object_name = parts[1].to_string();
                 }
-            },
+            }
             "v" => {
                 if parts.len() >= 4 {
                     if let (Ok(x), Ok(y), Ok(z)) = (
                         parts[1].parse::<f32>(),
                         parts[2].parse::<f32>(),
-                        parts[3].parse::<f32>()
+                        parts[3].parse::<f32>(),
                     ) {
                         vertices.push(x);
                         vertices.push(y);
                         vertices.push(z);
                     }
                 }
-            },
+            }
             "vn" => {
                 if parts.len() >= 4 {
                     if let (Ok(x), Ok(y), Ok(z)) = (
                         parts[1].parse::<f32>(),
                         parts[2].parse::<f32>(),
-                        parts[3].parse::<f32>()
+                        parts[3].parse::<f32>(),
                     ) {
                         normals.push(x);
                         normals.push(y);
                         normals.push(z);
                     }
                 }
-            },
+            }
             "vt" => {
                 if parts.len() >= 3 {
-                    if let (Ok(u), Ok(v)) = (
-                        parts[1].parse::<f32>(),
-                        parts[2].parse::<f32>()
-                    ) {
+                    if let (Ok(u), Ok(v)) = (parts[1].parse::<f32>(), parts[2].parse::<f32>()) {
                         texcoords.push(u);
                         texcoords.push(v);
                     }
                 }
-            },
+            }
             "f" => {
                 let mut face_indices = Vec::new();
                 for i in 1..parts.len() {
@@ -83,22 +92,34 @@ fn optimize_obj_advanced_text(data: &[u8], config: &MeshOptConfig) -> OptResult<
                         }
                     }
                 }
-                
+
                 if face_indices.len() == 3 {
                     faces.extend_from_slice(&face_indices);
                 } else if face_indices.len() == 4 {
                     faces.push(face_indices[0]);
                     faces.push(face_indices[1]);
                     faces.push(face_indices[2]);
-                    
+
                     faces.push(face_indices[0]);
                     faces.push(face_indices[2]);
                     faces.push(face_indices[3]);
                 }
-            },
+            }
             _ => {}
         }
     }
+
+    (object_name, vertices, normals, texcoords, faces)
+}
+
+fn optimize_obj_from_parsed(
+    object_name: String,
+    vertices: Vec<f32>,
+    _normals: Vec<f32>,
+    texcoords: Vec<f32>,
+    faces: Vec<u32>,
+    config: &MeshOptConfig,
+) -> OptResult<Vec<u8>> {
     
     let _start_time = get_current_time_ms();
     #[cfg(c_hotspots_available)]
@@ -125,8 +146,16 @@ fn optimize_obj_advanced_text(data: &[u8], config: &MeshOptConfig) -> OptResult<
     let (final_vertices, final_indices) = if config.weld_vertices {
         #[cfg(c_hotspots_available)]
         {
-            if data_size > 50_000 {
-                apply_vertex_welding(&optimized_vertices, &optimized_indices, config.vertex_tolerance)?
+            if config.use_c_hotspots {
+                if let Ok((v, i)) = crate::c_hotspots::mesh::weld_vertices_c(
+                    &optimized_vertices,
+                    &optimized_indices,
+                    config.vertex_tolerance,
+                ) {
+                    (v, i)
+                } else {
+                    apply_vertex_welding(&optimized_vertices, &optimized_indices, config.vertex_tolerance)?
+                }
             } else {
                 apply_vertex_welding(&optimized_vertices, &optimized_indices, config.vertex_tolerance)?
             }
@@ -138,6 +167,17 @@ fn optimize_obj_advanced_text(data: &[u8], config: &MeshOptConfig) -> OptResult<
         }
     } else {
         (optimized_vertices, optimized_indices)
+    };
+
+    let final_indices = if config.optimize_vertex_cache {
+        crate::mesh::optimizer::optimize_vertex_cache_forsyth(
+            final_vertices.len() / 3,
+            &final_indices,
+            config.use_c_hotspots,
+        )
+        .unwrap_or(final_indices)
+    } else {
+        final_indices
     };
     
     generate_optimized_obj_content(&object_name, &final_vertices, &final_indices, &texcoords, config)
@@ -247,7 +287,12 @@ fn generate_optimized_obj_content(
     }
     
     if config.generate_normals {
-        let normals = generate_normals_simple(vertices, indices);
+        let normals = crate::c_hotspots::mesh_attributes::generate_normals(
+            vertices,
+            indices,
+            config.use_c_hotspots,
+        )
+        .unwrap_or_else(|_| generate_normals_simple(vertices, indices));
         for chunk in normals.chunks(3) {
             if chunk.len() == 3 {
                 content.push_str(&format!("vn {} {} {}\n", chunk[0], chunk[1], chunk[2]));

@@ -75,6 +75,21 @@ WASM_EXPORT void apply_edge_detection(
 
 WASM_EXPORT void rgb_to_yuv(const uint8_t* rgb, uint8_t* yuv, size_t pixel_count);
 WASM_EXPORT void yuv_to_rgb(const uint8_t* yuv, uint8_t* rgb, size_t pixel_count);
+WASM_EXPORT void rgba_yuv_roundtrip_inplace(uint8_t* rgba, size_t pixel_count);
+
+WASM_EXPORT void quantize_rgb_bitshift(const uint8_t* rgb_in, uint8_t* rgb_out, size_t pixel_count, uint8_t bit_shift);
+
+WASM_EXPORT void palette_indices_to_rgba(
+    const uint8_t* indices,
+    size_t index_count,
+    const Color32* palette,
+    size_t palette_size,
+    uint8_t* rgba_out,
+    uint8_t default_r,
+    uint8_t default_g,
+    uint8_t default_b,
+    uint8_t default_a
+);
 WASM_EXPORT void rgb_to_lab(const uint8_t* rgb, float* lab, size_t pixel_count);
 WASM_EXPORT void lab_to_rgb(const float* lab, uint8_t* rgb, size_t pixel_count);
 

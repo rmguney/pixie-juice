@@ -484,45 +484,19 @@ fn apply_jpeg_c_hotspot_preprocessing(img: &DynamicImage, quality: u8) -> PixieR
 
 #[cfg(c_hotspots_available)]
 fn apply_yuv_color_space_optimization(rgba_data: &mut [u8]) {
-    let pixel_count = rgba_data.len() / 4;
-    let mut rgb_data = Vec::with_capacity(pixel_count * 3);
-    let mut yuv_data = vec![0u8; pixel_count * 3];
-    
-    for i in 0..pixel_count {
-        let base_idx = i * 4;
-        rgb_data.push(rgba_data[base_idx]);     // R
-        rgb_data.push(rgba_data[base_idx + 1]); // G
-        rgb_data.push(rgba_data[base_idx + 2]); // B
-    }
-    
-    crate::c_hotspots::image::rgb_to_yuv_simd(&rgb_data, &mut yuv_data);
-    crate::c_hotspots::image::yuv_to_rgb_simd(&yuv_data, &mut rgb_data);
-    
-    for i in 0..pixel_count {
-        let rgba_idx = i * 4;
-        let rgb_idx = i * 3;
-        rgba_data[rgba_idx] = rgb_data[rgb_idx];         // R
-        rgba_data[rgba_idx + 1] = rgb_data[rgb_idx + 1]; // G
-        rgba_data[rgba_idx + 2] = rgb_data[rgb_idx + 2]; // B
-    }
+    crate::c_hotspots::image::rgba_yuv_roundtrip_inplace_simd(rgba_data);
 }
 
 #[cfg(c_hotspots_available)]
 fn indices_to_rgba(indices: &[u8], palette: &[crate::c_hotspots::Color32], width: usize, height: usize) -> Vec<u8> {
-    let mut rgba_data = Vec::with_capacity(width * height * 4);
-    
-    for &index in indices {
-        if (index as usize) < palette.len() {
-            let color = &palette[index as usize];
-            rgba_data.push(color.r);
-            rgba_data.push(color.g);
-            rgba_data.push(color.b);
-            rgba_data.push(color.a);
-        } else {
-            rgba_data.extend_from_slice(&[0, 0, 0, 255]);
-        }
-    }
-    
+    let _ = (width, height);
+    let mut rgba_data = vec![0u8; indices.len() * 4];
+    crate::c_hotspots::image::palette_indices_to_rgba_hotspot(
+        indices,
+        palette,
+        &mut rgba_data,
+        crate::c_hotspots::Color32 { r: 0, g: 0, b: 0, a: 255 },
+    );
     rgba_data
 }
 

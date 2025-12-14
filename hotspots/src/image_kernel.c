@@ -1,5 +1,3 @@
-//! Image Processing Kernels
-
 #include "image_kernel.h"
 #include "util.h"
 
@@ -328,28 +326,70 @@ WASM_EXPORT QuantizedImage* quantize_colors_median_cut(const uint8_t* rgba_data,
     if (!unique_colors) return NULL;
     
     size_t unique_count = 0;
-    
+
+    size_t table_cap = 1;
+    size_t target_cap = pixel_count;
+    if (target_cap > (SIZE_MAX / 2)) {
+        target_cap = SIZE_MAX / 2;
+    }
+    target_cap = target_cap * 2;
+
+    const size_t cap_limit = 1u << 24;
+    if (target_cap > cap_limit) {
+        target_cap = cap_limit;
+    }
+
+    while (table_cap < target_cap && table_cap < cap_limit) {
+        table_cap <<= 1;
+    }
+
+    uint32_t* table = (uint32_t*)wasm_malloc(table_cap * sizeof(uint32_t));
+    if (!table) {
+        wasm_free(unique_colors);
+        return NULL;
+    }
+    memset(table, 0, table_cap * sizeof(uint32_t));
+
+    int has_ff = 0;
+
     for (size_t i = 0; i < pixel_count; i++) {
-        ColorEntry color = {
-            rgba_data[i*4],
-            rgba_data[i*4+1],
-            rgba_data[i*4+2],
-            rgba_data[i*4+3]
-        };
-        
-        int found = 0;
-        for (size_t j = 0; j < unique_count; j++) {
-            if (unique_colors[j].r == color.r && unique_colors[j].g == color.g &&
-                unique_colors[j].b == color.b && unique_colors[j].a == color.a) {
-                found = 1;
+        const uint32_t r = rgba_data[i * 4 + 0];
+        const uint32_t g = rgba_data[i * 4 + 1];
+        const uint32_t b = rgba_data[i * 4 + 2];
+        const uint32_t a = rgba_data[i * 4 + 3];
+
+        const uint32_t key = (r << 24) | (g << 16) | (b << 8) | a;
+
+        if (key == 0xFFFFFFFFu) {
+            if (!has_ff) {
+                unique_colors[unique_count++] = (ColorEntry){(uint8_t)r, (uint8_t)g, (uint8_t)b, (uint8_t)a};
+                has_ff = 1;
+            }
+            continue;
+        }
+
+        const uint32_t stored = key ^ 0xFFFFFFFFu;
+
+        size_t idx = (size_t)((key * 2654435761u) & (uint32_t)(table_cap - 1));
+        for (size_t probe = 0; probe < table_cap; probe++) {
+            const uint32_t slot = table[idx];
+            if (slot == 0) {
+                table[idx] = stored;
+                unique_colors[unique_count++] = (ColorEntry){(uint8_t)r, (uint8_t)g, (uint8_t)b, (uint8_t)a};
                 break;
             }
+            if (slot == stored) {
+                break;
+            }
+            idx = (idx + 1) & (table_cap - 1);
         }
-        
-        if (!found && unique_count < pixel_count) {
-            unique_colors[unique_count++] = color;
+
+        if (unique_count >= pixel_count) {
+            break;
         }
     }
+
+    wasm_free(table);
     
     QuantizedImage* result = (QuantizedImage*)wasm_malloc(sizeof(QuantizedImage));
     if (!result) {
@@ -409,6 +449,58 @@ WASM_EXPORT QuantizedImage* quantize_colors_median_cut(const uint8_t* rgba_data,
     
     wasm_free(unique_colors);
     return result;
+}
+
+WASM_EXPORT void quantize_rgb_bitshift(const uint8_t* rgb_in, uint8_t* rgb_out, size_t pixel_count, uint8_t bit_shift) {
+    if (!rgb_in || !rgb_out || pixel_count == 0) {
+        return;
+    }
+    if (bit_shift > 7) {
+        bit_shift = 7;
+    }
+
+    const uint8_t mask = (uint8_t)(0xFFu << bit_shift);
+    for (size_t i = 0; i < pixel_count; i++) {
+        const uint8_t r = rgb_in[i * 3 + 0];
+        const uint8_t g = rgb_in[i * 3 + 1];
+        const uint8_t b = rgb_in[i * 3 + 2];
+
+        rgb_out[i * 3 + 0] = (uint8_t)(r & mask);
+        rgb_out[i * 3 + 1] = (uint8_t)(g & mask);
+        rgb_out[i * 3 + 2] = (uint8_t)(b & mask);
+    }
+}
+
+WASM_EXPORT void palette_indices_to_rgba(
+    const uint8_t* indices,
+    size_t index_count,
+    const Color32* palette,
+    size_t palette_size,
+    uint8_t* rgba_out,
+    uint8_t default_r,
+    uint8_t default_g,
+    uint8_t default_b,
+    uint8_t default_a
+) {
+    if (!indices || !rgba_out || !palette || palette_size == 0 || index_count == 0) {
+        return;
+    }
+
+    for (size_t i = 0; i < index_count; i++) {
+        const uint8_t idx = indices[i];
+        if ((size_t)idx < palette_size) {
+            const Color32 c = palette[(size_t)idx];
+            rgba_out[i * 4 + 0] = c.r;
+            rgba_out[i * 4 + 1] = c.g;
+            rgba_out[i * 4 + 2] = c.b;
+            rgba_out[i * 4 + 3] = c.a;
+        } else {
+            rgba_out[i * 4 + 0] = default_r;
+            rgba_out[i * 4 + 1] = default_g;
+            rgba_out[i * 4 + 2] = default_b;
+            rgba_out[i * 4 + 3] = default_a;
+        }
+    }
 }
 
 void gaussian_blur_simd(uint8_t* image, int32_t width, int32_t height, int32_t channels, float sigma) {

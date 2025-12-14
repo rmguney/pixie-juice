@@ -10,7 +10,27 @@ pub fn optimize_fbx(data: &[u8], config: &MeshOptConfig) -> OptResult<Vec<u8>> {
     if is_binary_fbx(data) {
         optimize_binary_fbx(data, config)
     } else if is_ascii_fbx(data) {
-        let content = core::str::from_utf8(data)
+        let normalized = {
+            #[cfg(c_hotspots_available)]
+            {
+                if !config.preserve_topology && config.target_ratio < 1.0 {
+                    if let Some(out) = crate::c_hotspots::util::normalize_text_whitespace_commas(data) {
+                        out
+                    } else {
+                        data.to_vec()
+                    }
+                } else {
+                    data.to_vec()
+                }
+            }
+
+            #[cfg(not(c_hotspots_available))]
+            {
+                data.to_vec()
+            }
+        };
+
+        let content = core::str::from_utf8(&normalized)
             .map_err(|_| OptError::InvalidFormat("FBX ASCII contains invalid UTF-8".to_string()))?;
         
         let optimized_content = optimize_fbx_ascii(content, config)?;

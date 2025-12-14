@@ -144,7 +144,6 @@ function getArrayU8FromWasm0(ptr, len) {
     return getUint8ArrayMemory0().subarray(ptr / 1, ptr / 1 + len);
 }
 /**
- * WASM-compatible wrapper for auto optimization
  * @param {Uint8Array} data
  * @param {number} quality
  * @returns {Uint8Array}
@@ -171,7 +170,6 @@ export function pixie_optimize_auto(data, quality) {
 }
 
 /**
- * WASM-compatible wrapper for image optimization
  * @param {Uint8Array} data
  * @param {number} quality
  * @returns {Uint8Array}
@@ -198,7 +196,6 @@ export function pixie_optimize_image(data, quality) {
 }
 
 /**
- * WASM-compatible wrapper for mesh optimization
  * @param {Uint8Array} data
  * @returns {Uint8Array}
  */
@@ -224,7 +221,6 @@ export function pixie_optimize_mesh(data) {
 }
 
 /**
- * WASM-compatible function to get memory target for verification
  * @returns {number}
  */
 export function pixie_get_memory_target_mb() {
@@ -233,7 +229,6 @@ export function pixie_get_memory_target_mb() {
 }
 
 /**
- * WASM-compatible performance statistics getter
  * @returns {any}
  */
 export function pixie_get_performance_stats() {
@@ -241,15 +236,11 @@ export function pixie_get_performance_stats() {
     return takeObject(ret);
 }
 
-/**
- * WASM-compatible performance reset
- */
 export function pixie_reset_performance_stats() {
     wasm.pixie_reset_performance_stats();
 }
 
 /**
- * WASM-compatible performance compliance checker
  * @returns {boolean}
  */
 export function pixie_check_performance_compliance() {
@@ -1092,7 +1083,6 @@ export function is_ply(data) {
 }
 
 /**
- * Color space enumeration
  * @enum {0 | 1 | 2 | 3 | 4 | 5 | 6 | 7}
  */
 export const ColorSpace = Object.freeze({
@@ -1106,30 +1096,18 @@ export const ColorSpace = Object.freeze({
     LAB: 7, "7": "LAB",
 });
 /**
- * Mesh simplification algorithms
  * @enum {0 | 1 | 2}
  */
 export const SimplificationAlgorithm = Object.freeze({
-    /**
-     * Quadric Error Metrics - highest quality
-     */
     QuadricErrorMetrics: 0, "0": "QuadricErrorMetrics",
-    /**
-     * Edge collapse - good balance of speed and quality
-     */
     EdgeCollapse: 1, "1": "EdgeCollapse",
-    /**
-     * Vertex clustering - fastest but lower quality
-     */
     VertexClustering: 2, "2": "VertexClustering",
 });
 
 const ImageOptConfigFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_imageoptconfig_free(ptr >>> 0, 1));
-/**
- * Configuration for image optimization operations
- */
+
 export class ImageOptConfig {
 
     static __wrap(ptr) {
@@ -1325,9 +1303,7 @@ export class ImageOptConfig {
 const MeshOptConfigFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_meshoptconfig_free(ptr >>> 0, 1));
-/**
- * Configuration for mesh optimization operations
- */
+
 export class MeshOptConfig {
 
     static __wrap(ptr) {
@@ -1484,9 +1460,7 @@ export class MeshOptConfig {
 const PixieConfigFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_pixieconfig_free(ptr >>> 0, 1));
-/**
- * Main configuration structure for Pixie Juice WASM
- */
+
 export class PixieConfig {
 
     __destroy_into_raw() {
@@ -1546,7 +1520,6 @@ export class PixieConfig {
         wasm.pixieconfig_set_enable_threading(this.__wbg_ptr, value);
     }
     /**
-     * Convert to internal ImageOptConfig
      * @returns {ImageOptConfig}
      */
     to_image_config() {
@@ -1554,7 +1527,6 @@ export class PixieConfig {
         return ImageOptConfig.__wrap(ret);
     }
     /**
-     * Convert to internal MeshOptConfig
      * @returns {MeshOptConfig}
      */
     to_mesh_config() {

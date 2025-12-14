@@ -55,9 +55,11 @@ fn apply_svg_c_hotspot_preprocessing(data: &[u8], quality: u8) -> PixieResult<Ve
         }
         
         if quality <= 80 {
+            current_data = crate::c_hotspots::svg_minify_markup(&current_data)?;
         }
         
         if quality <= 60 {
+            current_data = crate::c_hotspots::svg_optimize_paths_c(&current_data)?;
         }
         
         Ok(current_data)

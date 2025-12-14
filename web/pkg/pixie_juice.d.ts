@@ -1,32 +1,11 @@
 /* tslint:disable */
 /* eslint-disable */
-/**
- * WASM-compatible wrapper for auto optimization
- */
 export function pixie_optimize_auto(data: Uint8Array, quality: number): Uint8Array;
-/**
- * WASM-compatible wrapper for image optimization
- */
 export function pixie_optimize_image(data: Uint8Array, quality: number): Uint8Array;
-/**
- * WASM-compatible wrapper for mesh optimization
- */
 export function pixie_optimize_mesh(data: Uint8Array): Uint8Array;
-/**
- * WASM-compatible function to get memory target for verification
- */
 export function pixie_get_memory_target_mb(): number;
-/**
- * WASM-compatible performance statistics getter
- */
 export function pixie_get_performance_stats(): any;
-/**
- * WASM-compatible performance reset
- */
 export function pixie_reset_performance_stats(): void;
-/**
- * WASM-compatible performance compliance checker
- */
 export function pixie_check_performance_compliance(): boolean;
 export function run_wasm_benchmarks(): any;
 export function init(): void;
@@ -71,9 +50,6 @@ export function is_gltf(data: Uint8Array): boolean;
 export function is_stl(data: Uint8Array): boolean;
 export function is_fbx(data: Uint8Array): boolean;
 export function is_ply(data: Uint8Array): boolean;
-/**
- * Color space enumeration
- */
 export enum ColorSpace {
   RGB = 0,
   RGBA = 1,
@@ -84,26 +60,11 @@ export enum ColorSpace {
   HSV = 6,
   LAB = 7,
 }
-/**
- * Mesh simplification algorithms
- */
 export enum SimplificationAlgorithm {
-  /**
-   * Quadric Error Metrics - highest quality
-   */
   QuadricErrorMetrics = 0,
-  /**
-   * Edge collapse - good balance of speed and quality
-   */
   EdgeCollapse = 1,
-  /**
-   * Vertex clustering - fastest but lower quality
-   */
   VertexClustering = 2,
 }
-/**
- * Configuration for image optimization operations
- */
 export class ImageOptConfig {
   private constructor();
   free(): void;
@@ -126,9 +87,6 @@ export class ImageOptConfig {
   get target_reduction(): number | undefined;
   set target_reduction(value: number | null | undefined);
 }
-/**
- * Configuration for mesh optimization operations
- */
 export class MeshOptConfig {
   private constructor();
   free(): void;
@@ -143,19 +101,10 @@ export class MeshOptConfig {
   preserve_uv_seams: boolean;
   preserve_boundaries: boolean;
 }
-/**
- * Main configuration structure for Pixie Juice WASM
- */
 export class PixieConfig {
   free(): void;
   constructor();
-  /**
-   * Convert to internal ImageOptConfig
-   */
   to_image_config(): ImageOptConfig;
-  /**
-   * Convert to internal MeshOptConfig
-   */
   to_mesh_config(): MeshOptConfig;
   use_c_hotspots: boolean;
   quality: number;

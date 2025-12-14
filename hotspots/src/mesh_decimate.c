@@ -432,6 +432,203 @@ WASM_EXPORT MeshDecimateResult decimate_mesh_qem(const float* vertices, size_t v
     return result;
 }
 
+typedef struct {
+    int32_t kx;
+    int32_t ky;
+    int32_t kz;
+    uint32_t value;
+    uint8_t used;
+} WeldEntry;
+
+static inline uint32_t weld_hash3(int32_t x, int32_t y, int32_t z) {
+    uint32_t h = (uint32_t)x * 0x9E3779B1u;
+    h ^= (uint32_t)y * 0x85EBCA77u;
+    h ^= (uint32_t)z * 0xC2B2AE3Du;
+    h ^= h >> 16;
+    h *= 0x7FEB352Du;
+    h ^= h >> 15;
+    h *= 0x846CA68Bu;
+    h ^= h >> 16;
+    return h;
+}
+
+static inline size_t weld_next_pow2(size_t v) {
+    if (v == 0) return 1;
+    v--;
+    v |= v >> 1;
+    v |= v >> 2;
+    v |= v >> 4;
+    v |= v >> 8;
+    v |= v >> 16;
+    return v + 1;
+}
+
+WASM_EXPORT MeshDecimateResult weld_vertices_spatial(const float* vertices, size_t vertex_count,
+                                        const uint32_t* indices, size_t index_count,
+                                        float tolerance) {
+    MeshDecimateResult result = {0};
+
+    if (!vertices || !indices || vertex_count == 0 || index_count == 0) {
+        result.success = 0;
+        const char* msg = "Invalid input parameters";
+        for (int i = 0; i < 255 && msg[i]; i++) {
+            result.error_message[i] = msg[i];
+        }
+        return result;
+    }
+
+    if (tolerance <= 0.0f) {
+        result.success = 0;
+        const char* msg = "Tolerance must be > 0";
+        for (int i = 0; i < 255 && msg[i]; i++) {
+            result.error_message[i] = msg[i];
+        }
+        return result;
+    }
+
+    const float inv_tolerance = 1.0f / tolerance;
+
+    size_t table_cap = weld_next_pow2(vertex_count * 2);
+    if (table_cap < 16) table_cap = 16;
+
+    WeldEntry* table = (WeldEntry*)wasm_malloc(table_cap * sizeof(WeldEntry));
+    if (!table) {
+        result.success = 0;
+        const char* msg = "Memory allocation failed";
+        for (int i = 0; i < 255 && msg[i]; i++) {
+            result.error_message[i] = msg[i];
+        }
+        return result;
+    }
+    for (size_t i = 0; i < table_cap; i++) {
+        table[i].used = 0;
+    }
+
+    uint32_t* remap = (uint32_t*)wasm_malloc(vertex_count * sizeof(uint32_t));
+    if (!remap) {
+        wasm_free(table);
+        result.success = 0;
+        const char* msg = "Memory allocation failed";
+        for (int i = 0; i < 255 && msg[i]; i++) {
+            result.error_message[i] = msg[i];
+        }
+        return result;
+    }
+
+    float* temp_vertices = (float*)wasm_malloc(vertex_count * 3 * sizeof(float));
+    if (!temp_vertices) {
+        wasm_free(remap);
+        wasm_free(table);
+        result.success = 0;
+        const char* msg = "Memory allocation failed";
+        for (int i = 0; i < 255 && msg[i]; i++) {
+            result.error_message[i] = msg[i];
+        }
+        return result;
+    }
+
+    size_t unique_count = 0;
+    const size_t mask = table_cap - 1;
+
+    for (size_t vi = 0; vi < vertex_count; vi++) {
+        float x = vertices[vi * 3 + 0];
+        float y = vertices[vi * 3 + 1];
+        float z = vertices[vi * 3 + 2];
+
+        int32_t kx = (int32_t)(x * inv_tolerance);
+        int32_t ky = (int32_t)(y * inv_tolerance);
+        int32_t kz = (int32_t)(z * inv_tolerance);
+
+        uint32_t h = weld_hash3(kx, ky, kz);
+        size_t slot = (size_t)h & mask;
+
+        for (;;) {
+            WeldEntry* e = &table[slot];
+            if (!e->used) {
+                e->used = 1;
+                e->kx = kx;
+                e->ky = ky;
+                e->kz = kz;
+                e->value = (uint32_t)unique_count;
+
+                temp_vertices[unique_count * 3 + 0] = x;
+                temp_vertices[unique_count * 3 + 1] = y;
+                temp_vertices[unique_count * 3 + 2] = z;
+
+                remap[vi] = (uint32_t)unique_count;
+                unique_count++;
+                break;
+            }
+
+            if (e->kx == kx && e->ky == ky && e->kz == kz) {
+                remap[vi] = e->value;
+                break;
+            }
+
+            slot = (slot + 1) & mask;
+        }
+    }
+
+    uint32_t* new_indices = (uint32_t*)wasm_malloc(index_count * sizeof(uint32_t));
+    if (!new_indices) {
+        wasm_free(temp_vertices);
+        wasm_free(remap);
+        wasm_free(table);
+        result.success = 0;
+        const char* msg = "Memory allocation failed";
+        for (int i = 0; i < 255 && msg[i]; i++) {
+            result.error_message[i] = msg[i];
+        }
+        return result;
+    }
+
+    for (size_t ii = 0; ii < index_count; ii++) {
+        uint32_t old = indices[ii];
+        if ((size_t)old >= vertex_count) {
+            wasm_free(new_indices);
+            wasm_free(temp_vertices);
+            wasm_free(remap);
+            wasm_free(table);
+            result.success = 0;
+            const char* msg = "Index out of range";
+            for (int i = 0; i < 255 && msg[i]; i++) {
+                result.error_message[i] = msg[i];
+            }
+            return result;
+        }
+        new_indices[ii] = remap[old];
+    }
+
+    float* new_vertices = (float*)wasm_malloc(unique_count * 3 * sizeof(float));
+    if (!new_vertices) {
+        wasm_free(new_indices);
+        wasm_free(temp_vertices);
+        wasm_free(remap);
+        wasm_free(table);
+        result.success = 0;
+        const char* msg = "Memory allocation failed";
+        for (int i = 0; i < 255 && msg[i]; i++) {
+            result.error_message[i] = msg[i];
+        }
+        return result;
+    }
+    for (size_t i = 0; i < unique_count * 3; i++) {
+        new_vertices[i] = temp_vertices[i];
+    }
+
+    wasm_free(temp_vertices);
+    wasm_free(remap);
+    wasm_free(table);
+
+    result.vertices = new_vertices;
+    result.indices = new_indices;
+    result.vertex_count = unique_count;
+    result.index_count = index_count;
+    result.success = 1;
+
+    return result;
+}
+
 WASM_EXPORT void free_mesh_decimate_result(MeshDecimateResult* result) {
     if (result && result->success) {
         wasm_free(result->vertices);

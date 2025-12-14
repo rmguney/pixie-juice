@@ -83,6 +83,12 @@ WASM_EXPORT uint8_t* ico_strip_metadata_simd(const uint8_t* input, size_t input_
 WASM_EXPORT uint8_t* ico_compress_directory(const uint8_t* input, size_t input_size,
                                       uint32_t compression_level, size_t* output_size);
 
+WASM_EXPORT int ply_find_end_header(const uint8_t* data, size_t data_len, size_t* header_end);
+
+WASM_EXPORT uint8_t* normalize_text_whitespace_commas(const uint8_t* input, size_t input_size, size_t* output_size);
+
+WASM_EXPORT void hotspot_free(void* ptr);
+
 #ifdef __cplusplus
 }
 #endif

@@ -1,5 +1,5 @@
 extern crate alloc;
-use alloc::{vec::Vec, string::ToString, format};
+use alloc::{vec, vec::Vec, string::ToString, format};
 
 use crate::types::{OptResult, OptError, PixieResult, ImageOptConfig};
 
@@ -448,20 +448,14 @@ fn apply_simd_preprocessing(img: &DynamicImage) -> Option<DynamicImage> {
 
 #[cfg(c_hotspots_available)]
 fn indices_to_rgba_png(indices: &[u8], palette: &[crate::c_hotspots::Color32], width: usize, height: usize) -> Vec<u8> {
-    let mut rgba_data = Vec::with_capacity(width * height * 4);
-    
-    for &index in indices {
-        if (index as usize) < palette.len() {
-            let color = &palette[index as usize];
-            rgba_data.push(color.r);
-            rgba_data.push(color.g);
-            rgba_data.push(color.b);
-            rgba_data.push(color.a);
-        } else {
-            rgba_data.extend_from_slice(&[0, 0, 0, 0]);
-        }
-    }
-    
+    let _ = (width, height);
+    let mut rgba_data = vec![0u8; indices.len() * 4];
+    crate::c_hotspots::image::palette_indices_to_rgba_hotspot(
+        indices,
+        palette,
+        &mut rgba_data,
+        crate::c_hotspots::Color32 { r: 0, g: 0, b: 0, a: 0 },
+    );
     rgba_data
 }
 
