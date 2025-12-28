@@ -22,7 +22,7 @@ pub fn optimize_png_with_config(data: &[u8], quality: u8, config: &ImageOptConfi
                 format!("Failed to load PNG: {}", e)
             ))?;
         
-        let strategies = get_png_optimization_strategies(quality, &img);
+        let strategies = get_png_optimization_strategies(quality, &img, config);
         
         let mut best_result = data.to_vec();
         
@@ -67,8 +67,16 @@ enum PNGOptimizationStrategy {
 }
 
 #[cfg(feature = "image")]
-fn get_png_optimization_strategies(quality: u8, img: &DynamicImage) -> Vec<PNGOptimizationStrategy> {
+fn get_png_optimization_strategies(
+    quality: u8,
+    img: &DynamicImage,
+    config: &ImageOptConfig,
+) -> Vec<PNGOptimizationStrategy> {
     let mut strategies = Vec::new();
+
+    // Keep format-stable by default. Only allow cross-format conversion when the caller
+    // explicitly requests an aggressive target reduction.
+    let allow_format_conversion = config.target_reduction.is_some();
     
     let has_transparency = match img {
         DynamicImage::ImageRgba8(rgba_img) => {
@@ -89,7 +97,7 @@ fn get_png_optimization_strategies(quality: u8, img: &DynamicImage) -> Vec<PNGOp
     
     strategies.push(PNGOptimizationStrategy::AggressiveReencode { compression_level });
     
-    if !has_transparency {
+    if allow_format_conversion && !has_transparency {
         let jpeg_quality = match quality {
             0..=30 => 15,
             31..=60 => 25,
@@ -99,7 +107,7 @@ fn get_png_optimization_strategies(quality: u8, img: &DynamicImage) -> Vec<PNGOp
         strategies.push(PNGOptimizationStrategy::ConvertToJPEG { jpeg_quality });
     }
     
-    if quality <= 85 {
+    if allow_format_conversion && quality <= 85 {
         let webp_quality = match quality {
             0..=30 => 50,
             31..=60 => 70,
