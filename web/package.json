@@ -8,7 +8,18 @@
     "build": "tsc -b && vite build",
     "build:wasm": "cd .. && wasm-pack build --target bundler --out-dir web/pkg --scope pixie-juice --release",
     "preview": "vite preview",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:headed": "playwright test --headed",
+    "test:e2e:debug": "playwright test --debug",
+    "test:e2e:report": "playwright show-report test-results/html",
+    "test:regression": "playwright test regression.spec.ts",
+    "test:regression:update": "UPDATE_BASELINE=true playwright test regression.spec.ts",
+    "test:all": "npm run test && npm run test:e2e"
   },
   "dependencies": {
     "@react-three/drei": "^10.4.2",
@@ -20,22 +31,28 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",
+    "@playwright/test": "^1.49.0",
+    "@testing-library/jest-dom": "^6.6.0",
+    "@testing-library/react": "^16.1.0",
     "@types/node": "^22.0.0",
     "@types/react": "19.2.3",
     "@types/react-dom": "^19.2.3",
     "@types/three": "^0.178.0",
     "@vitejs/plugin-react": "^4.3.4",
+    "@vitest/coverage-v8": "^4.0.16",
     "autoprefixer": "^10.4.20",
     "eslint": "^9.17.0",
     "eslint-plugin-react-hooks": "^5.1.0",
     "eslint-plugin-react-refresh": "^0.4.16",
     "globals": "^15.14.0",
+    "jsdom": "^25.0.0",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.17",
     "typescript": "~5.7.2",
     "typescript-eslint": "^8.18.1",
     "vite": "^6.0.5",
     "vite-plugin-top-level-await": "^1.4.4",
-    "vite-plugin-wasm": "^3.4.1"
+    "vite-plugin-wasm": "^3.4.1",
+    "vitest": "^4.0.16"
   }
 }

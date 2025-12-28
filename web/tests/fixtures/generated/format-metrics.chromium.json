@@ -1,0 +1,102 @@
+{
+  "generatedAt": "2025-12-28T21:41:40.127Z",
+  "project": "chromium",
+  "results": {
+    "bmp": {
+      "format": "bmp",
+      "inputSize": 196662,
+      "outputSize": 12283,
+      "compressionPct": 93.75425857562722,
+      "outputFormat": "image:Jpeg",
+      "ok": true
+    },
+    "jpeg": {
+      "format": "jpeg",
+      "inputSize": 13423,
+      "outputSize": 11409,
+      "compressionPct": 15.004097444684497,
+      "outputFormat": "image:Jpeg",
+      "ok": true
+    },
+    "png": {
+      "format": "png",
+      "inputSize": 49348,
+      "outputSize": 261,
+      "compressionPct": 99.47110318553943,
+      "outputFormat": "image:Png",
+      "ok": true
+    },
+    "webp": {
+      "format": "webp",
+      "inputSize": 60984,
+      "outputSize": 55532,
+      "compressionPct": 8.940049849140758,
+      "outputFormat": "image:WebP",
+      "ok": true
+    },
+    "gif": {
+      "format": "gif",
+      "inputSize": 3063,
+      "outputSize": 3063,
+      "compressionPct": 0,
+      "outputFormat": "image:Png",
+      "ok": true
+    },
+    "ico": {
+      "format": "ico",
+      "inputSize": 49370,
+      "outputSize": 49370,
+      "compressionPct": 0,
+      "outputFormat": "image:Ico",
+      "ok": true
+    },
+    "tga": {
+      "format": "tga",
+      "inputSize": 197644,
+      "outputSize": 15848,
+      "compressionPct": 91.98154257149218,
+      "outputFormat": "image:Jpeg",
+      "ok": true
+    },
+    "tiff": {
+      "format": "tiff",
+      "inputSize": 12428,
+      "outputSize": 1622,
+      "compressionPct": 86.94882523334407,
+      "outputFormat": "image:Jpeg",
+      "ok": true
+    },
+    "svg": {
+      "format": "svg",
+      "inputSize": 169,
+      "outputSize": 162,
+      "compressionPct": 4.142011834319527,
+      "outputFormat": "image:Svg",
+      "ok": true
+    },
+    "gltf": {
+      "format": "gltf",
+      "inputSize": 587,
+      "outputSize": 587,
+      "compressionPct": 0,
+      "outputFormat": "mesh:Gltf",
+      "ok": true
+    },
+    "glb": {
+      "format": "glb",
+      "inputSize": 560,
+      "outputSize": 280,
+      "compressionPct": 50,
+      "outputFormat": "mesh:Glb",
+      "ok": true
+    },
+    "fbx": {
+      "format": "fbx",
+      "inputSize": 32,
+      "outputSize": 32,
+      "compressionPct": 0,
+      "outputFormat": "mesh:Fbx",
+      "ok": true
+    }
+  }
+}
