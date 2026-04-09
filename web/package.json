@@ -39,7 +39,7 @@
     "@types/react-dom": "^19.2.3",
     "@types/three": "^0.178.0",
     "@vitejs/plugin-react": "^4.3.4",
-    "@vitest/coverage-v8": "^4.0.16",
+    "@vitest/coverage-v8": "^4.1.4",
     "autoprefixer": "^10.4.20",
     "eslint": "^9.17.0",
     "eslint-plugin-react-hooks": "^5.1.0",
@@ -52,7 +52,12 @@
     "typescript-eslint": "^8.18.1",
     "vite": "^6.0.5",
     "vite-plugin-top-level-await": "^1.4.4",
-    "vite-plugin-wasm": "^3.4.1",
-    "vitest": "^4.0.16"
+    "vite-plugin-wasm": "^3.6.0",
+    "vitest": "^4.1.4"
+  },
+  "overrides": {
+    "minimatch": ">=9.0.0",
+    "picomatch": ">=4.0.2",
+    "flatted": ">=3.3.3"
   }
 }
