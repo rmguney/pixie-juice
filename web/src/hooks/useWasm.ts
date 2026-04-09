@@ -36,7 +36,6 @@ export const useWasm = (): WasmHook => {
         }
         
       } catch (err) {
-        console.error('WASM loading error:', err);
         if (isMounted) {
           setError(err instanceof Error ? err.message : String(err));
           setLoading(false);

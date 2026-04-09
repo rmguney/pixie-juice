@@ -39,9 +39,22 @@ impl MeshOptimizer {
     }
 
     pub fn analyze(&self, data: &[u8]) -> OptResult<crate::types::MeshInfo> {
-        let _format = detect_mesh_format(data)?;
-        // TODO: Return actual mesh analysis
-        Ok(crate::types::MeshInfo::default())
+        let loaded = crate::mesh::loader::load_mesh_auto(data)?;
+        let bbox = loaded.metadata.bounding_box.map(|b| crate::types::BoundingBox {
+            min: [b.min_x, b.min_y, b.min_z],
+            max: [b.max_x, b.max_y, b.max_z],
+        }).unwrap_or(crate::types::BoundingBox { min: [0.0; 3], max: [0.0; 3] });
+        Ok(crate::types::MeshInfo {
+            vertex_count: loaded.vertex_count,
+            face_count: loaded.triangle_count,
+            triangle_count: loaded.triangle_count,
+            has_normals: loaded.metadata.has_normals,
+            has_texcoords: loaded.metadata.has_uvs,
+            has_colors: false,
+            bounding_box: bbox,
+            format: alloc::format!("{:?}", loaded.format),
+            file_size: Some(loaded.metadata.file_size),
+        })
     }
 }
 

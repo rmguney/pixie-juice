@@ -7,7 +7,7 @@ authors     = ["rmguney"]
 
 [lib]
 name       = "pixie_juice"
-crate-type = ["cdylib"]   # only what wasm-bindgen/wasm-pack needs
+crate-type = ["cdylib"]
 
 [dependencies]
 # ----- Image codecs / processing -----
@@ -26,10 +26,11 @@ palette          = { version = "0.7", optional = true, default-features = false 
 # oxipng           = { version = "9.1", optional = true, default-features = false }  # Requires C compiler
 tinytga          = { version = "0.5", optional = true, default-features = false }     # TGA support - no-std WASM compatible
 imagefmt         = { version = "4.0", optional = true, default-features = false, features = ["tga"] }  # TGA encode/decode
+quick-xml        = { version = "0.36", optional = true, default-features = false }  # pure-Rust XML reader/writer for SVG path
 
 
 # ----- Mesh / geometry -----
-gltf         = { version = "1.4", default-features = false, optional = true, features = ["KHR_lights_punctual","KHR_materials_transmission"] }
+gltf         = { version = "1.4", default-features = false, optional = true, features = ["KHR_lights_punctual","KHR_materials_transmission","utils","names"] }
 tobj         = { version = "3.2", optional = true, default-features = false }
 ply-rs       = { version = "0.1", optional = true, default-features = false }
 stl_io       = { version = "0.7", optional = true, default-features = false }
@@ -97,7 +98,7 @@ codec-gif     = ["gif"]
 # codec-webp    = ["webp", "dep:cc", "dep:bindgen"]  # Disabled - requires C
 codec-webp    = ["image-webp"]  # WebP support via dedicated pure Rust image-webp crate
 # codec-svg     = ["usvg","resvg"]
-codec-svg     = []  # SVG basic support without resvg dependency
+codec-svg     = ["quick-xml"]  # pure-Rust SVG markup optimization via quick-xml
 # codec-pdf     = ["pdf"]
 # codec-hdr     = ["exr"]
 codec-tiff    = ["tiff"]
@@ -120,7 +121,10 @@ fmt-usdz      = []       # Basic USDZ support (ZIP with USD files)
 c_hotspots    = ["dep:cc"]
 
 [lints.rust]
-unsafe_code = "warn"  # Allow unsafe for WASM FFI but warn
+# `unsafe_code` is intentionally not lint-gated here. This crate's design depends
+# on C FFI for WASM hotspots and on a custom no_std allocator: ~90 unsafe blocks
+# are load-bearing, not exceptional. Safety is tracked via `// SAFETY:` comments
+# on each block (see CLAUDE.md) rather than a noisy module-level warning.
 
 [lints.clippy]
 nursery  = "warn"

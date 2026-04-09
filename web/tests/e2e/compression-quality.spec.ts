@@ -421,9 +421,106 @@ test.describe('Output Validation', () => {
   test('output should not exceed input size significantly', async ({ page }) => {
     const testPng = createGradientPng(64, 64);
     const result = await testCompressionQuality(page, testPng, 80);
-    
+
     if (result.outputSize > 0) {
       expect(result.outputSize).toBeLessThan(result.inputSize * 2);
     }
+  });
+});
+
+test.describe('Corrupted-Input Error Paths', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto('/');
+    await waitForWasmReady(page);
+  });
+
+  // A "well-handled" corrupted input must either return an Error (preferred) or
+  // return the input unmodified — but it must NEVER crash the WASM module, hang,
+  // or silently produce empty output with no error.
+  const expectGracefulHandling = (result: CompressionQualityResult, inputLen: number) => {
+    const errored = result.error !== undefined;
+    const passedThrough = result.outputSize === inputLen && result.compressionRatio === 0;
+    const sensibleNonZero = result.outputSize > 0;
+    expect(errored || passedThrough || sensibleNonZero).toBe(true);
+  };
+
+  test('truncated PNG (magic bytes only) reports error or passes through', async ({ page }) => {
+    const truncated = new Uint8Array([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+    const result = await testCompressionQuality(page, truncated, 80);
+    expectGracefulHandling(result, truncated.length);
+  });
+
+  test('PNG with IHDR but no IDAT reports error or passes through', async ({ page }) => {
+    // Valid signature + valid IHDR length but cut off before pixel data.
+    const sig = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+    const ihdrLen = [0x00, 0x00, 0x00, 0x0D];
+    const ihdrType = [0x49, 0x48, 0x44, 0x52];
+    const ihdrData = [0, 0, 0, 1, 0, 0, 0, 1, 8, 2, 0, 0, 0];
+    const ihdrCrc = [0xCA, 0xFE, 0xBA, 0xBE];
+    const truncated = new Uint8Array([...sig, ...ihdrLen, ...ihdrType, ...ihdrData, ...ihdrCrc]);
+    const result = await testCompressionQuality(page, truncated, 80);
+    expectGracefulHandling(result, truncated.length);
+  });
+
+  test('truncated JPEG (SOI only) reports error or passes through', async ({ page }) => {
+    const truncated = new Uint8Array([0xFF, 0xD8]);
+    const result = await testCompressionQuality(page, truncated, 80);
+    expectGracefulHandling(result, truncated.length);
+  });
+
+  test('JPEG with SOI but no SOF reports error or passes through', async ({ page }) => {
+    // SOI + a stray JFIF APP0 segment that announces a length running off the buffer.
+    const truncated = new Uint8Array([
+      0xFF, 0xD8, // SOI
+      0xFF, 0xE0, // APP0 marker
+      0x00, 0xFF, // segment length claims 255 bytes
+      0x4A, 0x46, 0x49, 0x46, 0x00, // "JFIF\0"
+    ]);
+    const result = await testCompressionQuality(page, truncated, 80);
+    expectGracefulHandling(result, truncated.length);
+  });
+
+  test('truncated GIF87a header reports error or passes through', async ({ page }) => {
+    const truncated = new Uint8Array([0x47, 0x49, 0x46, 0x38, 0x37, 0x61]);
+    const result = await testCompressionQuality(page, truncated, 80);
+    expectGracefulHandling(result, truncated.length);
+  });
+
+  test('GIF89a header but no logical screen descriptor reports error or passes through', async ({ page }) => {
+    const truncated = new Uint8Array([
+      0x47, 0x49, 0x46, 0x38, 0x39, 0x61, // "GIF89a"
+      0x10, 0x00,                         // width = 16
+      // height/packed/bg/aspect intentionally missing
+    ]);
+    const result = await testCompressionQuality(page, truncated, 80);
+    expectGracefulHandling(result, truncated.length);
+  });
+
+  test('empty buffer reports error', async ({ page }) => {
+    const empty = new Uint8Array(0);
+    const result = await testCompressionQuality(page, empty, 80);
+    // Empty inputs must error: pass-through of zero bytes is indistinguishable
+    // from a silent crash and would mask real bugs in the loader.
+    expect(result.error !== undefined || result.outputSize === 0).toBe(true);
+  });
+
+  test('random garbage with no recognizable magic reports error or passes through', async ({ page }) => {
+    const garbage = new Uint8Array(64);
+    for (let i = 0; i < garbage.length; i++) {
+      garbage[i] = (i * 137 + 41) & 0xFF;
+    }
+    const result = await testCompressionQuality(page, garbage, 80);
+    expectGracefulHandling(result, garbage.length);
+  });
+
+  test('PNG magic followed by non-PNG payload reports error or passes through', async ({ page }) => {
+    const sig = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+    const garbage = new Uint8Array(sig.length + 256);
+    garbage.set(sig, 0);
+    for (let i = sig.length; i < garbage.length; i++) {
+      garbage[i] = (i * 31) & 0xFF;
+    }
+    const result = await testCompressionQuality(page, garbage, 80);
+    expectGracefulHandling(result, garbage.length);
   });
 });

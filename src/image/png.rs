@@ -6,7 +6,6 @@ use crate::types::{OptResult, OptError, PixieResult, ImageOptConfig};
 #[cfg(feature = "image")]
 use image::{load_from_memory, DynamicImage};
 
-#[cfg(all(feature = "image", target_arch = "wasm32"))]
 use image::GenericImageView;
 use image::codecs::png::{PngEncoder, CompressionType, FilterType};
 

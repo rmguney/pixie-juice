@@ -1,8 +1,21 @@
 import { test, expect, Page } from '@playwright/test';
 
 async function waitForWasm(page: Page): Promise<void> {
+  // Robust readiness probe: not just presence of window.pixieJuice, but a successful
+  // call to version(). WebKit can resolve the module assignment before the WASM
+  // instance has finished hooking up exports, so the loose `typeof !== 'undefined'`
+  // check races under that engine.
   await page.waitForFunction(
-    () => typeof (window as any).pixieJuice !== 'undefined',
+    () => {
+      const win = window as unknown as { pixieJuice?: { version?: () => string } };
+      if (!win.pixieJuice || typeof win.pixieJuice.version !== 'function') return false;
+      try {
+        const v = win.pixieJuice.version();
+        return typeof v === 'string' && v.length > 0;
+      } catch {
+        return false;
+      }
+    },
     { timeout: 30000 }
   );
 }
@@ -62,9 +75,6 @@ f 4 1 5 8
 }
 
 test.describe('End-to-End Workflow', () => {
-  // Skip WebKit due to WASM loading timing issues in these intensive tests
-  test.skip(({ browserName }) => browserName === 'webkit', 'WebKit has WASM timing issues');
-
   test.beforeEach(async ({ page }) => {
     await page.goto('/');
     await waitForWasm(page);

@@ -103,6 +103,12 @@ static MESHES_PROCESSED: AtomicU64 = AtomicU64::new(0);
 pub static ERRORS_COUNT: AtomicU64 = AtomicU64::new(0);
 static TOTAL_BYTES_PROCESSED: AtomicU64 = AtomicU64::new(0);
 static PERFORMANCE_TARGET_VIOLATIONS: AtomicU32 = AtomicU32::new(0);
+// f64 bits packed into u64 so we can keep these as global atomics without a Mutex.
+static LAST_OPERATION_TIME_BITS: AtomicU64 = AtomicU64::new(0);
+static IMAGE_TIME_SUM_BITS: AtomicU64 = AtomicU64::new(0);
+static MESH_TIME_SUM_BITS: AtomicU64 = AtomicU64::new(0);
+static MAX_IMAGE_TIME_BITS: AtomicU64 = AtomicU64::new(0);
+static MAX_MESH_TIME_BITS: AtomicU64 = AtomicU64::new(0);
 
 static PRESERVE_METADATA: AtomicBool = AtomicBool::new(false);
 static LOSSLESS_MODE: AtomicBool = AtomicBool::new(false);
@@ -129,33 +135,70 @@ const MEMORY_TARGET_MB: f64 = 256.0; // 256MB memory target for WASM
 
 pub fn update_performance_stats(is_image: bool, elapsed_ms: f64, data_size: usize) {
     TOTAL_BYTES_PROCESSED.fetch_add(data_size as u64, Ordering::Relaxed);
-    
+
+    LAST_OPERATION_TIME_BITS.store(elapsed_ms.to_bits(), Ordering::Relaxed);
+
     if is_image {
         IMAGES_PROCESSED.fetch_add(1, Ordering::Relaxed);
+        accumulate_time(&IMAGE_TIME_SUM_BITS, elapsed_ms);
+        update_max_time(&MAX_IMAGE_TIME_BITS, elapsed_ms);
     } else {
         MESHES_PROCESSED.fetch_add(1, Ordering::Relaxed);
+        accumulate_time(&MESH_TIME_SUM_BITS, elapsed_ms);
+        update_max_time(&MAX_MESH_TIME_BITS, elapsed_ms);
     }
-    
-    let target_ms = if data_size < 512_000 { // <512KB
+
+    let target_ms = if data_size < 512_000 {
         SMALL_FILE_TARGET_MS
     } else {
         IMAGE_TARGET_MS
     };
-    
+
     if elapsed_ms > target_ms {
         PERFORMANCE_TARGET_VIOLATIONS.fetch_add(1, Ordering::Relaxed);
     }
 }
 
+fn accumulate_time(slot: &AtomicU64, elapsed_ms: f64) {
+    let mut current = slot.load(Ordering::Relaxed);
+    loop {
+        let new_value = f64::from_bits(current) + elapsed_ms;
+        match slot.compare_exchange_weak(current, new_value.to_bits(), Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return,
+            Err(observed) => current = observed,
+        }
+    }
+}
+
+fn update_max_time(slot: &AtomicU64, elapsed_ms: f64) {
+    let mut current = slot.load(Ordering::Relaxed);
+    loop {
+        if elapsed_ms <= f64::from_bits(current) {
+            return;
+        }
+        match slot.compare_exchange_weak(current, elapsed_ms.to_bits(), Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return,
+            Err(observed) => current = observed,
+        }
+    }
+}
+
 pub fn get_performance_stats() -> PerformanceStats {
+    let images_processed = IMAGES_PROCESSED.load(Ordering::Relaxed);
+    let meshes_processed = MESHES_PROCESSED.load(Ordering::Relaxed);
+    let image_sum = f64::from_bits(IMAGE_TIME_SUM_BITS.load(Ordering::Relaxed));
+    let mesh_sum = f64::from_bits(MESH_TIME_SUM_BITS.load(Ordering::Relaxed));
+    let avg_image_time_ms = if images_processed > 0 { image_sum / images_processed as f64 } else { 0.0 };
+    let avg_mesh_time_ms = if meshes_processed > 0 { mesh_sum / meshes_processed as f64 } else { 0.0 };
+
     PerformanceStats {
-        images_processed: IMAGES_PROCESSED.load(Ordering::Relaxed),
-        meshes_processed: MESHES_PROCESSED.load(Ordering::Relaxed),
-        avg_image_time_ms: 0.0,
-        avg_mesh_time_ms: 0.0,
-        max_image_time_ms: 0.0,
-        max_mesh_time_ms: 0.0,
-        last_operation_time_ms: 0.0,
+        images_processed,
+        meshes_processed,
+        avg_image_time_ms,
+        avg_mesh_time_ms,
+        max_image_time_ms: f64::from_bits(MAX_IMAGE_TIME_BITS.load(Ordering::Relaxed)),
+        max_mesh_time_ms: f64::from_bits(MAX_MESH_TIME_BITS.load(Ordering::Relaxed)),
+        last_operation_time_ms: f64::from_bits(LAST_OPERATION_TIME_BITS.load(Ordering::Relaxed)),
         total_bytes_processed: TOTAL_BYTES_PROCESSED.load(Ordering::Relaxed),
         memory_peak_mb: 0.0,
         errors_count: ERRORS_COUNT.load(Ordering::Relaxed),
@@ -169,6 +212,11 @@ pub fn reset_performance_stats() {
     ERRORS_COUNT.store(0, Ordering::Relaxed);
     TOTAL_BYTES_PROCESSED.store(0, Ordering::Relaxed);
     PERFORMANCE_TARGET_VIOLATIONS.store(0, Ordering::Relaxed);
+    LAST_OPERATION_TIME_BITS.store(0, Ordering::Relaxed);
+    IMAGE_TIME_SUM_BITS.store(0, Ordering::Relaxed);
+    MESH_TIME_SUM_BITS.store(0, Ordering::Relaxed);
+    MAX_IMAGE_TIME_BITS.store(0, Ordering::Relaxed);
+    MAX_MESH_TIME_BITS.store(0, Ordering::Relaxed);
 }
 
 pub fn check_performance_compliance() -> bool {

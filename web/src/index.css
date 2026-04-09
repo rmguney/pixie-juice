@@ -5,3 +5,38 @@
 html, body {
   background-color: #000;
 }
+
+.quality-slider::-webkit-slider-thumb {
+  appearance: none;
+  height: 14px;
+  width: 14px;
+  border-radius: 50%;
+  background: #ffffff;
+  border: 2px solid #525252;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  transition: all 0.15s ease;
+  margin-top: -20px;
+}
+
+.quality-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.2);
+  border-color: #737373;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+}
+
+.quality-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #ffffff;
+  border: 2px solid #525252;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+.quality-slider::-moz-range-track {
+  background: transparent;
+  height: 1px;
+  border: none;
+}

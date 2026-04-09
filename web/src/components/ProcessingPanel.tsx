@@ -60,8 +60,8 @@ export default function ProcessingPanel({ files, wasm, onProcess, setIsProcessin
       if (wasm.set_preserve_metadata) wasm.set_preserve_metadata(preserveMetadata);
       const shouldUseLossless = losslessMode || quality >= 95;
       if (wasm.set_lossless_mode) wasm.set_lossless_mode(shouldUseLossless);
-    } catch (e) {
-      console.warn('Configuration setting failed:', e);
+    } catch {
+      // optional config; missing setters or runtime failure is non-fatal
     }
 
     const results: ProcessedResult[] = [];
@@ -201,18 +201,14 @@ export default function ProcessingPanel({ files, wasm, onProcess, setIsProcessin
 
       if (wasm.check_performance_compliance) {
         try {
-          const isCompliant = wasm.check_performance_compliance();
-          if (!isCompliant) {
-            console.warn('Performance targets exceeded during processing');
-          }
-        } catch (e) {
-          console.warn('Failed to check performance compliance:', e);
+          wasm.check_performance_compliance();
+        } catch {
+          // diagnostic only; ignore failures
         }
       }
 
       onProcess(results);
-    } catch (error) {
-      console.error('Processing failed:', error);
+    } catch {
       alert('Processing failed. Please try again.');
     } finally {
       setLocalProcessing(false);
@@ -285,40 +281,6 @@ export default function ProcessingPanel({ files, wasm, onProcess, setIsProcessin
             <span>50%</span>
             <span>100%</span>
           </div>
-          
-          <style>{`
-            .quality-slider::-webkit-slider-thumb {
-              appearance: none;
-              height: 14px;
-              width: 14px;
-              border-radius: 50%;
-              background: #ffffff;
-              border: 2px solid #525252;
-              cursor: pointer;
-              box-shadow: 0 1px 3px rgba(0,0,0,0.4);
-              transition: all 0.15s ease;
-              margin-top: -20px;
-            }
-            .quality-slider::-webkit-slider-thumb:hover {
-              transform: scale(1.2);
-              border-color: #737373;
-              box-shadow: 0 2px 6px rgba(0,0,0,0.5);
-            }
-            .quality-slider::-moz-range-thumb {
-              width: 14px;
-              height: 14px;
-              border-radius: 50%;
-              background: #ffffff;
-              border: 2px solid #525252;
-              cursor: pointer;
-              box-shadow: 0 1px 3px rgba(0,0,0,0.4);
-            }
-            .quality-slider::-moz-range-track {
-              background: transparent;
-              height: 1px;
-              border: none;
-            }
-          `}</style>
           
           <div className="text-xs text-neutral-500 mt-2">
             {quality <= 30 ? "Maximum compression (may affect quality)" : 

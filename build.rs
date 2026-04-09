@@ -34,8 +34,6 @@ fn create_fallback_bindings() {
 }
 
 fn compile_c_hotspots() -> Result<(), Box<dyn std::error::Error>> {
-    println!("cargo:warning=Compiling C hotspots for WASM-only target");
-    
     let target = env::var("TARGET").unwrap_or_default();
     
     if !target.contains("wasm32") {
@@ -43,8 +41,7 @@ fn compile_c_hotspots() -> Result<(), Box<dyn std::error::Error>> {
     }
     
     let clang_path = find_clang()?;
-    println!("cargo:warning=Found clang for WASM compilation at: {}", clang_path);
-    
+
     let hotspots_dir = "hotspots";
     let hotspots_src_dir = "hotspots/src";
     let hotspots_include_dir = "hotspots/include";
@@ -68,6 +65,9 @@ fn compile_c_hotspots() -> Result<(), Box<dyn std::error::Error>> {
         "mesh_decimate.c",
         "mesh_attributes.c",
         "vertex_cache.c",
+        "color_convert.c",
+        "color_distance.c",
+        "obj_parser.c",
     ];
     
     for file in &c_files {
@@ -93,8 +93,6 @@ fn compile_c_hotspots() -> Result<(), Box<dyn std::error::Error>> {
     if !build.get_compiler().is_like_msvc() {
         build.std("c11");
     }
-    
-    println!("cargo:warning=WASM-only target - configuring clang");
     
     build.compiler(&clang_path);
     build.flag("--target=wasm32-unknown-unknown");
@@ -122,63 +120,8 @@ fn compile_c_hotspots() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rustc-link-arg=--lto-O3");
     println!("cargo:rustc-link-arg=--no-demangle");
     println!("cargo:rustc-link-arg=--strip-debug");
-    println!("cargo:warning=Compiling C files: {:?}", c_files);
-    match build.try_compile("pixie_hotspots") {
-        Ok(_) => {
-            println!("cargo:warning=C hotspots compiled successfully for WASM!");
-        },
-        Err(e) => {
-            return Err(format!("C compilation failed: {}", e).into());
-        }
-    }
-    
-    let cpp_files = ["color_distance.cpp", "color_convert.cpp", "obj_parser.cpp"];
-    
-    for file in &cpp_files {
-        let path = format!("{}/{}", hotspots_src_dir, file);
-        if std::path::Path::new(&path).exists() {
-            println!("cargo:warning=Compiling C++ file: {}", file);
-            
-            let mut cpp_build = cc::Build::new();
-            cpp_build
-                .cpp(true)
-                .cpp_link_stdlib(None)
-                .file(&path)
-                .include(hotspots_include_dir)
-                .include(hotspots_src_dir)
-                .opt_level(3)
-                .debug(false)
-                .warnings(false)
-                .compiler(&clang_path)
-                .flag("--target=wasm32-unknown-unknown")
-                .flag("-std=c++17")
-                .flag("-O3")
-                .flag("-flto")
-                .flag("-msimd128")
-                .flag("-mbulk-memory")
-                .flag("-mmutable-globals")
-                .flag("-ffreestanding")
-                .flag("-nostdlib++")
-                .flag("-fno-exceptions")
-                .flag("-fno-rtti")
-                .flag("-fno-threadsafe-statics")
-                .flag("-nostdlib")
-                .flag("-fvisibility=hidden")
-                .flag("-fno-common")
-                .define("__wasm32__", None)
-                .define("WASM_TARGET", None)
-                .define("NDEBUG", None);
-            
-            match cpp_build.try_compile(&format!("pixie_{}", file.trim_end_matches(".cpp"))) {
-                Ok(_) => {
-                    println!("cargo:warning=C++ hotspot '{}' compiled successfully!", file);
-                },
-                Err(e) => {
-                    println!("cargo:warning=C++ compilation failed for '{}': {}", file, e);
-                    println!("cargo:warning=Continuing with C-only hotspots");
-                }
-            }
-        }
+    if let Err(e) = build.try_compile("pixie_hotspots") {
+        return Err(format!("C compilation failed: {}", e).into());
     }
     
     let out_path = PathBuf::from(env::var("OUT_DIR")?);
@@ -262,9 +205,7 @@ extern "C" {
 }
 "#,
     )?;
-    
-    println!("cargo:warning=Manual FFI bindings created successfully!");
-    
+
     println!("cargo:rerun-if-changed=hotspots/");
     
     Ok(())

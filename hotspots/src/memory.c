@@ -10,9 +10,13 @@ typedef long long int64_t;
 
 #ifdef __wasm32__
 
-// CRITICAL: Memory pool for WASM - 100MB maximum
-// This ensures we stay under the 100MB memory peak target
-static uint8_t memory_pool[100 * 1024 * 1024]; // 100MB pool
+// Memory pool size: keep small enough that WASM instantiation always succeeds in
+// constrained browser tabs. Tune via -DPIXIE_WASM_POOL_BYTES=... at build time.
+#ifndef PIXIE_WASM_POOL_BYTES
+#define PIXIE_WASM_POOL_BYTES (16u * 1024u * 1024u)
+#endif
+
+static uint8_t memory_pool[PIXIE_WASM_POOL_BYTES];
 static size_t memory_offset = 0;
 
 #define WASM_EXPORT __attribute__((visibility("default")))

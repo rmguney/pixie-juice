@@ -97,71 +97,17 @@ pub fn optimize_webp_with_config(data: &[u8], quality: u8, _config: &ImageOptCon
         }
         
         if quality <= 60 {
-            #[cfg(target_arch = "wasm32")]
-            crate::image::log_to_console("Strategy 2: Color quantization optimization");
-            
             match apply_webp_color_quantization(&best_result, quality) {
                 Ok(quantized) if quantized.len() < best_size => {
-                    let compression = ((best_size - quantized.len()) as f64 / best_size as f64) * 100.0;
-                    #[cfg(target_arch = "wasm32")]
-                    {
-                        let msg = format!("Color quantization: {} -> {} bytes ({:.2}% compression)", 
-                                        best_size, quantized.len(), compression);
-                        crate::image::log_to_console(&msg);
-                    }
                     best_result = quantized;
                     best_size = best_result.len();
                     strategies_succeeded += 1;
-                    
-                    #[cfg(not(target_arch = "wasm32"))]
-                    let _ = compression;
                 },
-                Ok(_) => {
-                    #[cfg(target_arch = "wasm32")]
-                    crate::image::log_to_console("Color quantization did not improve size");
-                },
-                Err(e) => {
-                    #[cfg(target_arch = "wasm32")]
-                    crate::image::log_to_console(&format!("Color quantization failed: {}", e));
-                    #[cfg(not(target_arch = "wasm32"))]
-                    let _ = e;
-                }
+                Ok(_) => {},
+                Err(_) => {}
             }
         }
-        
-        if quality <= 60 {
-            #[cfg(target_arch = "wasm32")]
-            crate::image::log_to_console("Strategy 2: Color quantization optimization");
-            
-            match apply_webp_color_quantization(&best_result, quality) {
-                Ok(quantized) if quantized.len() < best_size => {
-                    let compression = ((best_size - quantized.len()) as f64 / best_size as f64) * 100.0;
-                    #[cfg(target_arch = "wasm32")]
-                    {
-                        let msg = format!("Color quantization: {} -> {} bytes ({:.2}% compression)", 
-                                        best_size, quantized.len(), compression);
-                        crate::image::log_to_console(&msg);
-                    }
-                    best_result = quantized;
-                    best_size = best_result.len();
-                    strategies_succeeded += 1;
-                    
-                    #[cfg(not(target_arch = "wasm32"))]
-                    let _ = compression;
-                },
-                Ok(_) => {
-                    #[cfg(target_arch = "wasm32")]
-                    crate::image::log_to_console("Color quantization did not improve size");
-                },
-                Err(e) => {
-                    #[cfg(target_arch = "wasm32")]
-                    crate::image::log_to_console(&format!("Color quantization failed: {}", e));
-                    #[cfg(not(target_arch = "wasm32"))]
-                    let _ = e;
-                }
-            }
-        }
-        
+
         #[cfg(c_hotspots_available)]
         if quality <= 70 && data.len() > 50_000 {
             #[cfg(target_arch = "wasm32")]
@@ -880,85 +826,17 @@ fn optimize_animated_webp_reencoding(data: &[u8], _quality: u8) -> PixieResult<V
     Err(PixieError::FeatureNotEnabled("Animated WebP optimization requires 'codec-webp' feature".to_string()))
 }
 
-#[allow(dead_code)]
-fn strip_animated_webp_metadata(data: &[u8], quality: u8) -> PixieResult<Vec<u8>> {
-    if data.len() < 12 || !is_webp(data) {
-        return Err(PixieError::InvalidImageFormat("Invalid WebP file".into()));
-    }
-    
-    let mut result = Vec::new();
-    
-    result.extend_from_slice(&data[0..4]);
-    let file_size_pos = result.len();
-    result.extend_from_slice(&[0u8; 4]);
-    result.extend_from_slice(&data[8..12]);
-    
-    let mut pos = 12;
-    let mut found_animation = false;
-    
-    while pos + 8 <= data.len() {
-        let chunk_id = &data[pos..pos + 4];
-        let chunk_size = u32::from_le_bytes([
-            data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]
-        ]) as usize;
-        
-        if pos + 8 + chunk_size > data.len() {
-            break;
-        }
-        
-        let keep_chunk = match chunk_id {
-            b"VP8X" | b"ANIM" | b"ANMF" | b"VP8 " | b"VP8L" | b"ALPH" => {
-                if chunk_id == b"ANIM" {
-                    found_animation = true;
-                }
-                true
-            },
-            b"ICCP" => quality >= 85,
-            b"EXIF" | b"XMP " => false,
-            _ => false,
-        };
-        
-        if keep_chunk {
-            result.extend_from_slice(&data[pos..pos + 8 + chunk_size]);
-            
-            if chunk_size % 2 == 1 {
-                result.push(0);
-            }
-        }
-        
-        pos += 8 + chunk_size;
-        if chunk_size % 2 == 1 {
-            pos += 1;
-        }
-    }
-    
-    let new_file_size = (result.len() - 8) as u32;
-    let size_bytes = new_file_size.to_le_bytes();
-    result[file_size_pos..file_size_pos + 4].copy_from_slice(&size_bytes);
-    
-    if found_animation && result.len() < data.len() {
-        Ok(result)
-    } else {
-        Err(PixieError::ProcessingError("No animation found or no size reduction achieved".to_string()))
-    }
-}
-
-#[allow(dead_code)]
-fn optimize_webp_animation_params(data: &[u8], quality: u8) -> PixieResult<Vec<u8>> {
-    if quality <= 50 {
-        strip_animated_webp_metadata(data, quality.max(60))
-    } else {
-        strip_animated_webp_metadata(data, quality)
-    }
-}
-#[cfg(not(feature = "codec-webp"))]
-pub fn optimize_webp(_data: &[u8], _quality: u8, _config: &ImageOptConfig) -> PixieResult<Vec<u8>> {
-    Err(PixieError::FeatureNotAvailable("WebP codec not available - enable codec-webp feature".into()))
-}
-
+#[cfg(feature = "codec-webp")]
 pub fn optimize_webp(data: &[u8], quality: u8) -> OptResult<Vec<u8>> {
     optimize_webp_rust(data, quality)
         .map_err(|e| OptError::ProcessingError(e.to_string()))
+}
+
+#[cfg(not(feature = "codec-webp"))]
+pub fn optimize_webp(_data: &[u8], _quality: u8) -> OptResult<Vec<u8>> {
+    Err(OptError::ProcessingError(
+        "WebP codec not available - enable codec-webp feature".to_string(),
+    ))
 }
 
 pub fn detect_animated_webp(data: &[u8]) -> bool {
@@ -982,16 +860,6 @@ pub fn detect_animated_webp(data: &[u8]) -> bool {
         }
     }
     false
-}
-
-pub fn optimize_webp_with_config_alt(data: &[u8], quality: u8, config: &ImageOptConfig) -> OptResult<Vec<u8>> {
-    optimize_webp_with_config(data, quality, config)
-        .map_err(|e| OptError::ProcessingError(e.to_string()))
-}
-
-pub fn optimize_webp_old(data: &[u8], quality: u8, config: &ImageOptConfig) -> OptResult<Vec<u8>> {
-    let _ = config;
-    optimize_webp(data, quality)
 }
 
 pub fn is_webp(data: &[u8]) -> bool {

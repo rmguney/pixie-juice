@@ -1,10 +1,12 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useWasm } from './hooks/useWasm';
 import FileDropZone from './components/FileDropZone';
 import ProcessingPanel from './components/ProcessingPanel';
 import ResultsPanel from './components/ResultsPanel';
 import FilePreview from './components/FilePreview';
 import type { ProcessedResult, PerformanceMetrics } from './types';
+
+type PreviewMode = 'before' | 'after';
 
 export default function App() {
   const wasmHook = useWasm();
@@ -13,7 +15,33 @@ export default function App() {
   const [processedResults, setProcessedResults] = useState<ProcessedResult[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [previewMode, setPreviewMode] = useState<PreviewMode>('before');
   const [performanceStats, setPerformanceStats] = useState<PerformanceMetrics | null>(null);
+
+  const optimizedFileForSelected = useMemo<File | null>(() => {
+    if (!selectedFile) return null;
+    const match = processedResults.find(
+      (r) => r.success && r.optimizedData && r.originalFile.name === selectedFile.name,
+    );
+    if (!match || !match.optimizedData) return null;
+    const ext = match.targetFormat || selectedFile.name.split('.').pop() || 'bin';
+    const baseName = selectedFile.name.replace(/\.[^/.]+$/, '');
+    return new File(
+      [new Uint8Array(match.optimizedData)],
+      `${baseName}_juice.${ext}`,
+      { type: selectedFile.type || `application/${ext}` },
+    );
+  }, [selectedFile, processedResults]);
+
+  useEffect(() => {
+    if (previewMode === 'after' && !optimizedFileForSelected) {
+      setPreviewMode('before');
+    }
+  }, [previewMode, optimizedFileForSelected]);
+
+  const filePreviewSource = previewMode === 'after' && optimizedFileForSelected
+    ? optimizedFileForSelected
+    : selectedFile;
 
   useEffect(() => {
     if (selectedFiles.length > 0 && !selectedFile) {
@@ -32,8 +60,8 @@ export default function App() {
         try {
           const stats = wasmHook.get_performance_metrics();
           setPerformanceStats(stats);
-        } catch (e) {
-          console.warn('Failed to get performance metrics:', e);
+        } catch {
+          // metrics are optional; ignore failures
         }
       }
     }
@@ -41,9 +69,9 @@ export default function App() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-black flex items-center justify-center">
+      <div className="min-h-screen bg-black flex items-center justify-center" role="status" aria-live="polite">
         <div className="text-center">
-          <div className="w-6 h-6 border border-white border-t-transparent rounded-full animate-spin mx-auto mb-3"></div>
+          <div className="w-6 h-6 border border-white border-t-transparent rounded-full animate-spin mx-auto mb-3" aria-hidden="true"></div>
           <p className="text-neutral-500 text-sm">Loading WASM module...</p>
         </div>
       </div>
@@ -79,14 +107,22 @@ export default function App() {
             
             {performanceStats && (
               <div className="text-sm font-light tracking-widest text-neutral-300 hover:text-white transition-colors transition-300">
-                <a href="https://github.com/rmguney/pixie-juice" target="_blank" rel="noopener noreferrer">/rmguney</a>
+                <a
+                  href="https://github.com/rmguney/pixie-juice"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  aria-label="Pixie Juice on GitHub (opens in new tab)"
+                  className="focus:outline-none focus-visible:ring-2 focus-visible:ring-white rounded"
+                >
+                  /rmguney
+                </a>
               </div>
             )}
           </div>
         </div>
       </header>
 
-      <div className="max-w-6xl mx-auto px-4 pb-12">
+      <main className="max-w-6xl mx-auto px-4 pb-12">
         {selectedFiles.length === 0 ? (
           <div className="flex justify-center">
             <div className="max-w-md w-full">
@@ -109,11 +145,45 @@ export default function App() {
               </div>
 
               <div className="order-2 h-[300px] md:h-[400px] lg:h-[calc(100vh-150px)] bg-black rounded-lg overflow-hidden">
-                <div className="p-4 border-b border-neutral-800">
-                  <h3 className="text-sm font-normal text-white text-center">Preview</h3>
+                <div className="p-3 border-b border-neutral-800 flex items-center justify-center gap-3">
+                  <h3 className="text-sm font-normal text-white">Preview</h3>
+                  {optimizedFileForSelected && (
+                    <div
+                      role="tablist"
+                      aria-label="Preview source"
+                      className="inline-flex border border-neutral-800 rounded overflow-hidden"
+                    >
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={previewMode === 'before'}
+                        onClick={() => setPreviewMode('before')}
+                        className={`px-2 py-1 text-xs transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white ${
+                          previewMode === 'before'
+                            ? 'bg-white text-black'
+                            : 'text-neutral-400 hover:text-white'
+                        }`}
+                      >
+                        Before
+                      </button>
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={previewMode === 'after'}
+                        onClick={() => setPreviewMode('after')}
+                        className={`px-2 py-1 text-xs transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white ${
+                          previewMode === 'after'
+                            ? 'bg-white text-black'
+                            : 'text-neutral-400 hover:text-white'
+                        }`}
+                      >
+                        After
+                      </button>
+                    </div>
+                  )}
                 </div>
                 <div className="h-[calc(100%-56px)] p-4">
-                  <FilePreview file={selectedFile} />
+                  <FilePreview file={filePreviewSource} />
                 </div>
               </div>
 
@@ -141,7 +211,7 @@ export default function App() {
             </div>
           </div>
         )}
-      </div>
+      </main>
     </div>
   );
 }

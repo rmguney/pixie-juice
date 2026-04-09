@@ -6,8 +6,6 @@ static inline uint8_t clamp_u8_i32(int32_t v) {
     return (uint8_t)v;
 }
 
-extern "C" {
-
 WASM_EXPORT void rgb_to_yuv(const uint8_t* rgb, uint8_t* yuv, size_t pixel_count) {
     if (!rgb || !yuv || pixel_count == 0) {
         return;
@@ -73,6 +71,4 @@ WASM_EXPORT void rgba_yuv_roundtrip_inplace(uint8_t* rgba, size_t pixel_count) {
         rgba[i * 4 + 1] = clamp_u8_i32(g);
         rgba[i * 4 + 2] = clamp_u8_i32(b);
     }
-}
-
 }

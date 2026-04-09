@@ -1,4 +1,9 @@
-#![allow(dead_code, unused_variables)]
+// Dead-code allow is scoped to this module: it contains pure-Rust fallbacks for each C
+// hotspot (`*_rust_fallback`) plus alternate code paths kept for resilience when a given
+// C kernel is disabled, fails, or compiles out under cfg gates. Removing them would break
+// graceful degradation guaranteed by the project (see CLAUDE.md "Graceful degradation").
+// `unused_variables` is deliberately NOT suppressed so real bugs stay visible.
+#![allow(dead_code)]
 
 extern crate alloc;
 use alloc::{vec, vec::Vec, string::String, format};
@@ -11,6 +16,7 @@ use crate::types::{PixieResult, PixieError};
 include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 
 #[cfg(c_hotspots_available)]
+#[allow(dead_code)]
 extern "C" {
     fn buffer_create(initial_capacity: usize) -> *mut core::ffi::c_void;
     fn buffer_destroy(buffer: *mut core::ffi::c_void);
@@ -677,9 +683,6 @@ pub mod image {
     }
     
     pub fn median_cut_quantization(rgba_data: &[u8], width: usize, height: usize, max_colors: usize) -> PixieResult<(Vec<Color32>, Vec<u8>)> {
-        let start_time = get_current_time_ms();
-        let data_size = rgba_data.len();
-        
         #[cfg(c_hotspots_available)]
         {
             unsafe {
@@ -2039,10 +2042,11 @@ fn advanced_pixel_processing_rust_fallback(rgba_data: &mut [u8], operation_type:
                     let min_val = r.min(g).min(b);
                     
                     if max_val > min_val {
-                        let saturation_factor = 1.3;
-                        chunk[0] = (r + (r - min_val) * 0.3).min(255.0) as u8;
-                        chunk[1] = (g + (g - min_val) * 0.3).min(255.0) as u8;
-                        chunk[2] = (b + (b - min_val) * 0.3).min(255.0) as u8;
+                        let saturation_factor = 1.3f32;
+                        let amount = saturation_factor - 1.0;
+                        chunk[0] = (r + (r - min_val) * amount).min(255.0) as u8;
+                        chunk[1] = (g + (g - min_val) * amount).min(255.0) as u8;
+                        chunk[2] = (b + (b - min_val) * amount).min(255.0) as u8;
                     }
                 }
             }

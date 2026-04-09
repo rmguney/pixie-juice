@@ -1,8 +1,8 @@
 # Pixie Juice
 
-**Secure and high performance graphics processing engine in C, C++, and Rust for WebAssembly targets.**
+**Secure and high performance graphics processing engine in C and Rust for WebAssembly targets.**
 
-Pixie Juice is a client side WebAssembly application built with C, C++, and Rust that optimizes and converts images and 3D meshes without uploading files to any server. Your data never leaves your device, ensuring complete information security while delivering fast and fail-safe media processing.
+Pixie Juice is a client-side WebAssembly application built with C and Rust that optimizes and converts images and 3D meshes without uploading files to any server. Your data never leaves your device, ensuring complete information security while delivering fast and fail-safe media processing.
 
 ## Phase 1 - Core Features for MVP (under active development)
 
@@ -34,25 +34,24 @@ Pixie Juice is a client side WebAssembly application built with C, C++, and Rust
 | **BMP** | ✅ Working | 93.75% | Works via auto strategy; converts this sample to JPEG (expected). |
 | **TIFF** | ✅ Working | 86.95% | Works via auto strategy; converts this sample to JPEG (expected). |
 | **GIF** | ⚠️ Partial | 0% | Loads and runs, but the current sample is effectively a no-op (auto outputs PNG with no size change). |
-| **ICO** | ✅ Working | 0% | Preserves the ICO container on the current sample (size preservation is expected here). |
-| **SVG** | ✅ Working | 4.14% | Keeps SVG output; optimizes markup on the current sample. |
+| **ICO** | ✅ Working | varies | Real parse/serialize: PNG ancillary-chunk stripping, size-entry deduplication, BMP→PNG conversion for older entries. Compression depends on the specific ICO. |
+| **SVG** | ✅ Working | 4.14% | Real `quick-xml` walker: drops `<title>/<desc>/<metadata>`, shortens hex colors inside known color attributes only. Replaces the older fragile string-replace path. |
 | **TGA** | ✅ Working | 91.98% | Works via auto strategy; converts this sample to JPEG (expected). |
-| **OBJ** | ✅ Working | Various | Load + optimize + download works; main remaining work is quality/perf tuning, not basic functionality. |
-| **PLY** | ⚠️ Partial | Various | ASCII PLY works; binary PLY is still fragile (see limitations below). |
-| **glTF** | ⚠️ Partial | 0% | Loads/runs on the minimal sample, but the current sample shows no size change (optimization path needs improvement/validation). |
-| **GLB** | ✅ Working | 50% | Works end-to-end; current minimal sample shows size reduction. |
-| **STL** | ⚠️ Partial | Various | File detection/upload works; optimize flow can be inconsistent in the UI. |
-| **FBX** | ⚠️ Partial | 0% | Current minimal/stub sample shows no size change; real optimization path is not fully validated yet. |
+| **OBJ** | ✅ Working | varies | Load + optimize + download works; main remaining work is quality/perf tuning, not basic functionality. |
+| **PLY** | ✅ Working | varies | Binary + ASCII PLY both supported. (Previous "Invalid UTF-8" failure on small binary files was a header-detection bug — fixed and covered by unit tests.) |
+| **glTF** | ✅ Working | varies | Real `serde_json`-based JSON optimization: strips empty objects/arrays, drops `name`/`copyright`/`generator`/`extras` under aggressive quality. |
+| **GLB** | ✅ Working | 50% | Real GLB chunk parser (magic + version + length + JSON/BIN chunks with 4-byte padding). Previous version silently truncated and corrupted GLBs — fixed and covered by a round-trip test. |
+| **STL** | ✅ Working | varies | Binary + ASCII STL supported; UI button activates whenever WASM is ready and files are uploaded. |
+| **FBX** | ⚠️ Partial | varies | Detection + binary node-walker for analysis (Vertices / PolygonVertexIndex / Normals / UV); ASCII array-extraction works. Optimization path is conservative (whitespace cleanup for ASCII, trailing-zero trim for binary) — non-destructive but rarely produces large savings. |
 
 Compression numbers above are from deterministic synthetic samples (useful as a regression signal), not a promise of real-world results.
 
-Known limitations (what is not working yet):
+### Known limitations
 
-- PLY (binary): can fail with UTF-8-related parsing errors; ASCII is the reliable path today.
-- STL / FBX: detection/upload works, but the “optimize” UI activation + end-to-end flow still needs hardening.
-- glTF: loads/runs, but optimization needs improvement/validation (current minimal sample is a no-op).
-- FBX: optimization path still needs validation (current sample is stubby/no-op).
-- GIF: current sample is a no-op; real-world gains depend on content (palette/frames/metadata).
+- **FBX optimization**: the binary FBX parser surfaces real geometry counts, but the optimization path itself is intentionally conservative because the FBX binary format is a proprietary, reverse-engineered container — aggressive rewrites risk corrupting metadata. Expect small or no size reductions on FBX until a deeper rewrite ships.
+- **GIF auto-routing**: when `optimize_auto` decides the best output for a small/static GIF is PNG, the synthetic regression sample looks like a 0% no-op. Real-world animated GIFs do benefit from the GIF-specific path; the regression sample is just an artifact of the test data.
+- **Mesh decimation**: the QEM / edge-collapse / vertex-clustering paths are pure-Rust implementations of well-known algorithms. They are correct and deterministic but won't match a tuned C++ `meshoptimizer` build in quality-per-decimation-ratio.
+- **External glTF buffers**: glTF JSON files that reference external `.bin` URIs cannot be loaded in browser-only mode (no filesystem); GLB and glTF-with-base64-embedded buffers work fine.
 
 ### Test Suite
 

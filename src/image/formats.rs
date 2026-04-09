@@ -127,10 +127,3 @@ pub fn detect_image_format(data: &[u8]) -> OptResult<ImageFormat> {
     Err(OptError::InvalidFormat("Unknown image format".to_string()))
 }
 
-pub fn get_image_info(data: &[u8]) -> OptResult<()> {
-    let _format = detect_image_format(data)?;
-    
-    // TODO: Implement basic header parsing for each format
-    // without requiring std::io::Cursor
-    Ok(())
-}

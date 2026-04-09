@@ -97,6 +97,10 @@ pub fn optimize_bmp(data: &[u8], quality: u8, config: &ImageOptConfig) -> PixieR
                             data_size, best_result.len(), compression_ratio, elapsed);
             log(&msg);
             
+            // SAFETY: PERF_STATS is a process-wide counter touched only from the WASM single-threaded
+            // main loop (no other workers write it), so the data race normally guarded against by
+            // `static mut` access cannot occur in this target. Counters saturate naturally; we
+            // accept lost updates rather than serialize through a Mutex.
             unsafe {
                 extern "C" {
                     static mut PERF_STATS: crate::optimizers::PerformanceStats;
@@ -114,7 +118,7 @@ pub fn optimize_bmp(data: &[u8], quality: u8, config: &ImageOptConfig) -> PixieR
     
     #[cfg(not(feature = "image"))]
     {
-        Err(PixieError::UnsupportedFeature("BMP optimization requires image feature".to_string()))
+        Err(PixieError::FeatureNotEnabled("BMP optimization requires image feature".to_string()))
     }
 }
 

@@ -78,21 +78,33 @@ export default function FileDropZone({ selectedFiles, setSelectedFiles, onFileSe
       </div>
       
       <div
-        className={`p-8 text-center transition-colors cursor-pointer ${
+        role="button"
+        tabIndex={0}
+        aria-label="Drop files or activate to choose files"
+        className={`p-8 text-center transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-black ${
           selectedFiles.length === 0 ? 'border-b border-dashed border-neutral-800' : ''
         } ${isDragging ? 'bg-neutral-900/50' : 'hover:bg-neutral-900/20'}`}
         onDrop={handleDrop}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onClick={() => document.getElementById('file-input')?.click()}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            document.getElementById('file-input')?.click();
+          }
+        }}
       >
         <div className="flex flex-col items-center justify-center">
-          <div className="text-2xl mb-2">&#128193;</div>
+          <div className="text-2xl mb-2" aria-hidden="true">&#128193;</div>
           <h3 className="text-sm font-normal text-white mb-2">Drop files or click to upload</h3>
           <p className="text-[10px] mb-4 text-neutral-500">OBJ, PLY, STL, GLTF, GLB, FBX, PNG, JPEG, WebP, GIF, BMP, TIFF, SVG, TGA, ICO</p>
-          <button className="px-4 py-2 border border-white text-white text-sm rounded hover:bg-white hover:text-black transition-colors">
+          <span
+            aria-hidden="true"
+            className="inline-block px-4 py-2 border border-white text-white text-sm rounded hover:bg-white hover:text-black transition-colors"
+          >
             Choose Files
-          </button>
+          </span>
         </div>
         <input
           id="file-input"
@@ -117,35 +129,34 @@ export default function FileDropZone({ selectedFiles, setSelectedFiles, onFileSe
               Clear all
             </button>
           </div>
-          <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+          <ul className="space-y-2 max-h-56 overflow-y-auto pr-1" aria-label="Selected files">
             {selectedFiles.map((file, index) => (
-              <div
-                key={index}
-                className="flex items-center justify-between p-2.5 border border-neutral-800 rounded hover:border-neutral-700 transition-colors"
-                onClick={() => onFileSelect && onFileSelect(file)}
-              >
-                <div className="flex items-center space-x-2.5">
-                  <div className="text-lg">
-                    {isImageFile(file) ? '\u{1F5BC}\uFE0F' : '\u{1F9CA}'}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs text-white truncate max-w-[240px]">{file.name}</p>
-                    <p className="text-xs text-neutral-500">{(file.size / 1024 / 1024).toFixed(2)} MB</p>
-                  </div>
-                </div>
+              <li key={index} className="flex items-center justify-between border border-neutral-800 rounded hover:border-neutral-700 transition-colors">
                 <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    removeFile(index);
-                  }}
-                  className="ml-2 text-neutral-500 hover:text-red-400 p-1.5 transition-colors"
-                  title="Remove file"
+                  type="button"
+                  className="flex-1 flex items-center space-x-2.5 p-2.5 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-white rounded"
+                  onClick={() => onFileSelect && onFileSelect(file)}
+                  aria-label={`Preview ${file.name}`}
                 >
-                  &#10005;
+                  <span className="text-lg" aria-hidden="true">
+                    {isImageFile(file) ? '\u{1F5BC}\uFE0F' : '\u{1F9CA}'}
+                  </span>
+                  <span className="flex-1 min-w-0">
+                    <span className="block text-xs text-white truncate max-w-[240px]">{file.name}</span>
+                    <span className="block text-xs text-neutral-500">{(file.size / 1024 / 1024).toFixed(2)} MB</span>
+                  </span>
                 </button>
-              </div>
+                <button
+                  type="button"
+                  onClick={() => removeFile(index)}
+                  className="ml-2 mr-2 text-neutral-500 hover:text-red-400 p-1.5 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white rounded"
+                  aria-label={`Remove ${file.name}`}
+                >
+                  <span aria-hidden="true">&#10005;</span>
+                </button>
+              </li>
             ))}
-          </div>
+          </ul>
         </div>
       )}
     </div>

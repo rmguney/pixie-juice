@@ -1,5 +1,9 @@
-#ifndef COLOR_LUT_HPP
-#define COLOR_LUT_HPP
+#ifndef COLOR_LUT_H
+#define COLOR_LUT_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 static const float SRGB_TO_LINEAR_LUT[257] = {
     0.0f, 0.000303527f, 0.000607054f, 0.00091058f, 0.001214108f, 0.001517635f, 0.001821162f, 0.002124689f,
@@ -52,7 +56,11 @@ static const unsigned char LINEAR_TO_SRGB_LUT[192] = {
     252, 253, 254, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255
 };
 
-inline const float* get_srgb_to_linear_lut() { return SRGB_TO_LINEAR_LUT; }
-inline const unsigned char* get_linear_to_srgb_lut() { return LINEAR_TO_SRGB_LUT; }
+static inline const float* get_srgb_to_linear_lut(void) { return SRGB_TO_LINEAR_LUT; }
+static inline const unsigned char* get_linear_to_srgb_lut(void) { return LINEAR_TO_SRGB_LUT; }
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

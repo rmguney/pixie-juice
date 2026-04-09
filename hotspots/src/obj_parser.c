@@ -43,40 +43,40 @@ static inline float pow10_i32(int32_t e) {
     return v;
 }
 
-static bool parse_i32(const uint8_t*& p, const uint8_t* end, int32_t& out) {
-    p = skip_spaces(p, end);
-    if (p >= end) return false;
+static bool parse_i32(const uint8_t** p, const uint8_t* end, int32_t* out) {
+    *p = skip_spaces(*p, end);
+    if (*p >= end) return false;
 
     int32_t sign = 1;
-    if (*p == '-') {
+    if (**p == '-') {
         sign = -1;
-        p++;
-    } else if (*p == '+') {
-        p++;
+        (*p)++;
+    } else if (**p == '+') {
+        (*p)++;
     }
 
-    if (p >= end || !is_digit(*p)) return false;
+    if (*p >= end || !is_digit(**p)) return false;
 
     int32_t v = 0;
-    while (p < end && is_digit(*p)) {
-        v = v * 10 + (int32_t)(*p - '0');
-        p++;
+    while (*p < end && is_digit(**p)) {
+        v = v * 10 + (int32_t)(**p - '0');
+        (*p)++;
     }
 
-    out = v * sign;
+    *out = v * sign;
     return true;
 }
 
-static bool parse_f32(const uint8_t*& p, const uint8_t* end, float& out) {
-    p = skip_spaces(p, end);
-    if (p >= end) return false;
+static bool parse_f32(const uint8_t** p, const uint8_t* end, float* out) {
+    *p = skip_spaces(*p, end);
+    if (*p >= end) return false;
 
     int32_t sign = 1;
-    if (*p == '-') {
+    if (**p == '-') {
         sign = -1;
-        p++;
-    } else if (*p == '+') {
-        p++;
+        (*p)++;
+    } else if (**p == '+') {
+        (*p)++;
     }
 
     uint32_t int_part = 0;
@@ -85,19 +85,19 @@ static bool parse_f32(const uint8_t*& p, const uint8_t* end, float& out) {
 
     bool has_digits = false;
 
-    while (p < end && is_digit(*p)) {
+    while (*p < end && is_digit(**p)) {
         has_digits = true;
-        int_part = int_part * 10u + (uint32_t)(*p - '0');
-        p++;
+        int_part = int_part * 10u + (uint32_t)(**p - '0');
+        (*p)++;
     }
 
-    if (p < end && *p == '.') {
-        p++;
-        while (p < end && is_digit(*p)) {
+    if (*p < end && **p == '.') {
+        (*p)++;
+        while (*p < end && is_digit(**p)) {
             has_digits = true;
-            frac_part = frac_part * 10u + (uint32_t)(*p - '0');
+            frac_part = frac_part * 10u + (uint32_t)(**p - '0');
             frac_div *= 10u;
-            p++;
+            (*p)++;
         }
     }
 
@@ -110,16 +110,16 @@ static bool parse_f32(const uint8_t*& p, const uint8_t* end, float& out) {
         v += ((float)frac_part) / (float)frac_div;
     }
 
-    if (p < end && (*p == 'e' || *p == 'E')) {
-        p++;
+    if (*p < end && (**p == 'e' || **p == 'E')) {
+        (*p)++;
         int32_t exp = 0;
-        if (!parse_i32(p, end, exp)) {
+        if (!parse_i32(p, end, &exp)) {
             return false;
         }
         v *= pow10_i32(exp);
     }
 
-    out = v * (float)sign;
+    *out = v * (float)sign;
     return true;
 }
 
@@ -145,11 +145,9 @@ static void set_error(ObjParseResult* r, const char* msg) {
     r->error_message[i] = 0;
 }
 
-extern "C" {
-
 WASM_EXPORT ObjParseResult* obj_parse_to_mesh(const uint8_t* data, size_t data_len) {
     ObjParseResult* result = (ObjParseResult*)wasm_malloc(sizeof(ObjParseResult));
-    if (!result) return nullptr;
+    if (!result) return NULL;
 
     memset(result, 0, sizeof(ObjParseResult));
     result->success = 0;
@@ -168,7 +166,7 @@ WASM_EXPORT ObjParseResult* obj_parse_to_mesh(const uint8_t* data, size_t data_l
     size_t tri_index_count = 0;
 
     bool saw_object = false;
-    const uint8_t* object_name_ptr = nullptr;
+    const uint8_t* object_name_ptr = NULL;
     size_t object_name_len = 0;
 
     while (p < end) {
@@ -240,7 +238,7 @@ WASM_EXPORT ObjParseResult* obj_parse_to_mesh(const uint8_t* data, size_t data_l
 
                     int32_t idx_val = 0;
                     const uint8_t* idx_start = t;
-                    if (!parse_i32(t, end, idx_val)) {
+                    if (!parse_i32(&t, end, &idx_val)) {
                         t = skip_to_eol(line, end);
                         verts_in_face = 0;
                         break;
@@ -283,8 +281,8 @@ WASM_EXPORT ObjParseResult* obj_parse_to_mesh(const uint8_t* data, size_t data_l
     }
 
     result->vertices = (float*)wasm_malloc(v_count * 3 * sizeof(float));
-    result->normals = vn_count ? (float*)wasm_malloc(vn_count * 3 * sizeof(float)) : nullptr;
-    result->texcoords = vt_count ? (float*)wasm_malloc(vt_count * 2 * sizeof(float)) : nullptr;
+    result->normals = vn_count ? (float*)wasm_malloc(vn_count * 3 * sizeof(float)) : NULL;
+    result->texcoords = vt_count ? (float*)wasm_malloc(vt_count * 2 * sizeof(float)) : NULL;
     result->indices = (uint32_t*)wasm_malloc(tri_index_count * sizeof(uint32_t));
 
     result->vertex_count = v_count;
@@ -334,7 +332,7 @@ WASM_EXPORT ObjParseResult* obj_parse_to_mesh(const uint8_t* data, size_t data_l
             if (t < end && is_space(*t)) {
                 t = skip_spaces(t, end);
                 float x = 0.0f, y = 0.0f, z = 0.0f;
-                if (parse_f32(t, end, x) && parse_f32(t, end, y) && parse_f32(t, end, z)) {
+                if (parse_f32(&t, end, &x) && parse_f32(&t, end, &y) && parse_f32(&t, end, &z)) {
                     if (vn_written < vn_count) {
                         result->normals[vn_written * 3 + 0] = x;
                         result->normals[vn_written * 3 + 1] = y;
@@ -352,7 +350,7 @@ WASM_EXPORT ObjParseResult* obj_parse_to_mesh(const uint8_t* data, size_t data_l
             if (t < end && is_space(*t)) {
                 t = skip_spaces(t, end);
                 float u = 0.0f, v = 0.0f;
-                if (parse_f32(t, end, u) && parse_f32(t, end, v)) {
+                if (parse_f32(&t, end, &u) && parse_f32(&t, end, &v)) {
                     if (vt_written < vt_count) {
                         result->texcoords[vt_written * 2 + 0] = u;
                         result->texcoords[vt_written * 2 + 1] = v;
@@ -369,7 +367,7 @@ WASM_EXPORT ObjParseResult* obj_parse_to_mesh(const uint8_t* data, size_t data_l
             if (t < end && is_space(*t)) {
                 t = skip_spaces(t, end);
                 float x = 0.0f, y = 0.0f, z = 0.0f;
-                if (parse_f32(t, end, x) && parse_f32(t, end, y) && parse_f32(t, end, z)) {
+                if (parse_f32(&t, end, &x) && parse_f32(&t, end, &y) && parse_f32(&t, end, &z)) {
                     if (v_written < v_count) {
                         result->vertices[v_written * 3 + 0] = x;
                         result->vertices[v_written * 3 + 1] = y;
@@ -395,7 +393,7 @@ WASM_EXPORT ObjParseResult* obj_parse_to_mesh(const uint8_t* data, size_t data_l
                     if (t >= end || is_newline(*t)) break;
 
                     int32_t idx_val = 0;
-                    if (!parse_i32(t, end, idx_val)) {
+                    if (!parse_i32(&t, end, &idx_val)) {
                         face_n = 0;
                         break;
                     }
@@ -455,6 +453,4 @@ WASM_EXPORT void free_obj_parse_result(ObjParseResult* result) {
     if (result->indices) wasm_free(result->indices);
     if (result->object_name) wasm_free(result->object_name);
     wasm_free(result);
-}
-
 }

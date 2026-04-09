@@ -7,225 +7,514 @@ pub struct MeshOptimizerCore;
 
 impl MeshOptimizerCore {
     pub fn decimate_mesh_qem(
-        vertices: &[f32], 
-        indices: &[u32], 
+        vertices: &[f32],
+        indices: &[u32],
         target_ratio: f32,
-        config: &MeshOptConfig
+        config: &MeshOptConfig,
     ) -> PixieResult<(Vec<f32>, Vec<u32>)> {
         let start_time = get_current_time_ms();
         let data_size = vertices.len() * 4 + indices.len() * 4;
-        
-        #[cfg(c_hotspots_available)]
-        {
-            if data_size > 200_000 {
-            }
+
+        if vertices.len() % 3 != 0 {
+            return Err(PixieError::MeshOptimizationFailed("vertex array length must be a multiple of 3".to_string()));
         }
-        
+        if indices.len() % 3 != 0 {
+            return Err(PixieError::MeshOptimizationFailed("index array length must be a multiple of 3".to_string()));
+        }
+        let target_ratio = target_ratio.clamp(0.01, 1.0);
+
         let result = match config.simplification_algorithm {
             crate::types::SimplificationAlgorithm::QuadricErrorMetrics => {
-                decimate_qem_rust(vertices, indices, target_ratio, config)
-            },
+                decimate_qem(vertices, indices, target_ratio)
+            }
             crate::types::SimplificationAlgorithm::EdgeCollapse => {
-                decimate_edge_collapse_rust(vertices, indices, target_ratio, config)
-            },
+                decimate_edge_collapse(vertices, indices, target_ratio)
+            }
             crate::types::SimplificationAlgorithm::VertexClustering => {
-                decimate_vertex_clustering_rust(vertices, indices, target_ratio, config)
-            },
+                decimate_vertex_clustering(vertices, indices, target_ratio)
+            }
         };
-        
+
         let elapsed = get_current_time_ms() - start_time;
         update_performance_stats(false, elapsed, data_size);
-        
-        match result {
-            Ok(decimated) => Ok(decimated),
-            Err(e) => {
-                Err(e)
-            }
-        }
+        result
     }
 
     pub fn weld_vertices(
-        vertices: &[f32], 
-        indices: &[u32], 
-        tolerance: f32
+        vertices: &[f32],
+        indices: &[u32],
+        tolerance: f32,
     ) -> PixieResult<(Vec<f32>, Vec<u32>)> {
         let start_time = get_current_time_ms();
         let data_size = vertices.len() * 4 + indices.len() * 4;
-        
+
         let result = weld_vertices_spatial_hash(vertices, indices, tolerance);
-        
+
         let elapsed = get_current_time_ms() - start_time;
         update_performance_stats(false, elapsed, data_size);
-        
         result
     }
 
     pub fn optimize_vertex_cache(
-        vertices: &[f32], 
-        indices: &[u32]
+        vertices: &[f32],
+        indices: &[u32],
     ) -> PixieResult<Vec<u32>> {
         let start_time = get_current_time_ms();
         let data_size = vertices.len() * 4 + indices.len() * 4;
-        
+
         let vertex_count = vertices.len() / 3;
         let result = optimize_vertex_cache_forsyth(vertex_count, indices, false);
-        
+
         let elapsed = get_current_time_ms() - start_time;
         update_performance_stats(false, elapsed, data_size);
-        
         result
     }
 }
 
-#[cfg(c_hotspots_available)]
-fn apply_c_mesh_decimation(
-    vertices: &[f32], 
-    indices: &[u32], 
-    target_ratio: f32
-) -> PixieResult<(Vec<f32>, Vec<u32>)> {
-    use crate::c_hotspots::decimate_mesh_qem;
-    
-    unsafe {
-        let result = decimate_mesh_qem(
-            vertices.as_ptr(),
-            vertices.len(),
-            indices.as_ptr(),
-            indices.len(),
-            target_ratio
-        );
-        
-        if result.success != 0 {
-            let new_vertices = Vec::from_raw_parts(
-                result.vertices,
-                result.vertex_count,
-                result.vertex_count
-            );
-            let new_indices = Vec::from_raw_parts(
-                result.indices,
-                result.index_count,
-                result.index_count
-            );
-            Ok((new_vertices, new_indices))
-        } else {
-            Err(PixieError::CHotspotError("Mesh decimation failed".to_string()))
-        }
-    }
-}
-
-fn decimate_qem_rust(
-    vertices: &[f32], 
-    indices: &[u32], 
-    target_ratio: f32,
-    config: &MeshOptConfig
-) -> PixieResult<(Vec<f32>, Vec<u32>)> {
-    if vertices.len() % 3 != 0 {
-        return Err(PixieError::MeshOptimizationFailed(
-            "Invalid vertex data: must be multiples of 3".to_string()
-        ));
-    }
-    
-    if indices.len() % 3 != 0 {
-        return Err(PixieError::MeshOptimizationFailed(
-            "Invalid index data: must be multiples of 3".to_string()
-        ));
-    }
-    
-    let target_triangle_count = ((indices.len() / 3) as f32 * target_ratio) as usize;
-    
-    if config.preserve_topology {
-        let _decimation_step = if target_ratio > 0.5 { 2 } else { 3 };
-        let mut new_indices = Vec::new();
-        
-        for chunk in indices.chunks(3) {
-            if new_indices.len() / 3 < target_triangle_count {
-                new_indices.extend_from_slice(chunk);
-            }
-        }
-        
-        Ok((vertices.to_vec(), new_indices))
-    } else {
-        let mut new_indices = Vec::new();
-        let step = indices.len() / 3 / target_triangle_count.max(1);
-        
-        for i in (0..indices.len()).step_by(step * 3) {
-            if i + 2 < indices.len() {
-                new_indices.push(indices[i]);
-                new_indices.push(indices[i + 1]);
-                new_indices.push(indices[i + 2]);
-            }
-        }
-        
-        Ok((vertices.to_vec(), new_indices))
-    }
-}
-
-fn decimate_edge_collapse_rust(
-    vertices: &[f32], 
-    indices: &[u32], 
-    target_ratio: f32,
-    _config: &MeshOptConfig
-) -> PixieResult<(Vec<f32>, Vec<u32>)> {
-    let target_count = ((indices.len() / 3) as f32 * target_ratio) as usize * 3;
-    let mut new_indices = indices.to_vec();
-    new_indices.truncate(target_count);
-    
-    Ok((vertices.to_vec(), new_indices))
-}
-
-fn decimate_vertex_clustering_rust(
-    vertices: &[f32], 
-    indices: &[u32], 
-    target_ratio: f32,
-    _config: &MeshOptConfig
-) -> PixieResult<(Vec<f32>, Vec<u32>)> {
-    let target_count = ((indices.len() / 3) as f32 * target_ratio) as usize * 3;
-    let mut new_indices = indices.to_vec();
-    new_indices.truncate(target_count);
-    
-    Ok((vertices.to_vec(), new_indices))
-}
-
 fn weld_vertices_spatial_hash(
-    vertices: &[f32], 
-    indices: &[u32], 
-    tolerance: f32
+    vertices: &[f32],
+    indices: &[u32],
+    tolerance: f32,
 ) -> PixieResult<(Vec<f32>, Vec<u32>)> {
     use alloc::collections::BTreeMap;
-    
-    let mut vertex_map = BTreeMap::new();
-    let mut new_vertices = Vec::new();
-    let mut new_indices = Vec::new();
-    
+
+    if vertices.len() % 3 != 0 {
+        return Err(PixieError::MeshOptimizationFailed("vertex array length must be a multiple of 3".to_string()));
+    }
+    let tolerance = if tolerance > 0.0 { tolerance } else { 1e-6 };
     let inv_tolerance = 1.0 / tolerance;
-    
-    for i in 0..vertices.len() / 3 {
+    let original_vertex_count = vertices.len() / 3;
+
+    let mut bucket: BTreeMap<(i32, i32, i32), u32> = BTreeMap::new();
+    let mut new_vertices: Vec<f32> = Vec::with_capacity(vertices.len());
+    let mut old_to_new: Vec<u32> = Vec::with_capacity(original_vertex_count);
+
+    for i in 0..original_vertex_count {
         let x = vertices[i * 3];
         let y = vertices[i * 3 + 1];
         let z = vertices[i * 3 + 2];
-        
-        let hash_x = (x * inv_tolerance) as i32;
-        let hash_y = (y * inv_tolerance) as i32;
-        let hash_z = (z * inv_tolerance) as i32;
-        let hash_key = (hash_x, hash_y, hash_z);
-        
-        if let Some(&existing_index) = vertex_map.get(&hash_key) {
-            for &index in indices.iter() {
-                if index == i as u32 {
-                    new_indices.push(existing_index);
-                } else {
-                    new_indices.push(index);
-                }
-            }
+        let key = (
+            (x * inv_tolerance).round() as i32,
+            (y * inv_tolerance).round() as i32,
+            (z * inv_tolerance).round() as i32,
+        );
+        if let Some(&existing) = bucket.get(&key) {
+            old_to_new.push(existing);
         } else {
-            let new_index = new_vertices.len() as u32 / 3;
-            vertex_map.insert(hash_key, new_index);
+            let new_idx = (new_vertices.len() / 3) as u32;
+            bucket.insert(key, new_idx);
             new_vertices.push(x);
             new_vertices.push(y);
             new_vertices.push(z);
+            old_to_new.push(new_idx);
         }
     }
-    
+
+    let mut new_indices: Vec<u32> = Vec::with_capacity(indices.len());
+    for tri in indices.chunks_exact(3) {
+        let a = *old_to_new.get(tri[0] as usize).ok_or_else(|| {
+            PixieError::MeshOptimizationFailed("index out of range during weld".to_string())
+        })?;
+        let b = *old_to_new.get(tri[1] as usize).ok_or_else(|| {
+            PixieError::MeshOptimizationFailed("index out of range during weld".to_string())
+        })?;
+        let c = *old_to_new.get(tri[2] as usize).ok_or_else(|| {
+            PixieError::MeshOptimizationFailed("index out of range during weld".to_string())
+        })?;
+        if a != b && b != c && a != c {
+            new_indices.push(a);
+            new_indices.push(b);
+            new_indices.push(c);
+        }
+    }
+
     Ok((new_vertices, new_indices))
+}
+
+fn bounding_box(vertices: &[f32]) -> Option<([f32; 3], [f32; 3])> {
+    if vertices.len() < 3 {
+        return None;
+    }
+    let mut min = [vertices[0], vertices[1], vertices[2]];
+    let mut max = min;
+    for chunk in vertices.chunks_exact(3) {
+        for d in 0..3 {
+            if chunk[d] < min[d] { min[d] = chunk[d]; }
+            if chunk[d] > max[d] { max[d] = chunk[d]; }
+        }
+    }
+    Some((min, max))
+}
+
+fn decimate_vertex_clustering(
+    vertices: &[f32],
+    indices: &[u32],
+    target_ratio: f32,
+) -> PixieResult<(Vec<f32>, Vec<u32>)> {
+    use alloc::collections::BTreeMap;
+
+    let (min, max) = bounding_box(vertices)
+        .ok_or_else(|| PixieError::MeshOptimizationFailed("empty mesh".to_string()))?;
+
+    let original_vertex_count = vertices.len() / 3;
+    if original_vertex_count == 0 {
+        return Ok((Vec::new(), Vec::new()));
+    }
+    let target_vertex_count = ((original_vertex_count as f32 * target_ratio).ceil() as usize).max(4);
+
+    let grid_resolution = grid_resolution_for_target(target_vertex_count);
+    let extents = [
+        (max[0] - min[0]).max(1e-6),
+        (max[1] - min[1]).max(1e-6),
+        (max[2] - min[2]).max(1e-6),
+    ];
+    let inv_step = [
+        grid_resolution as f32 / extents[0],
+        grid_resolution as f32 / extents[1],
+        grid_resolution as f32 / extents[2],
+    ];
+
+    let mut cluster_accum: BTreeMap<(u32, u32, u32), ([f32; 3], u32, u32)> = BTreeMap::new();
+    let mut cluster_index: BTreeMap<(u32, u32, u32), u32> = BTreeMap::new();
+    let mut old_to_cluster_key: Vec<(u32, u32, u32)> = Vec::with_capacity(original_vertex_count);
+
+    for i in 0..original_vertex_count {
+        let p = [vertices[i * 3], vertices[i * 3 + 1], vertices[i * 3 + 2]];
+        let key = (
+            (((p[0] - min[0]) * inv_step[0]) as u32).min(grid_resolution.saturating_sub(1)),
+            (((p[1] - min[1]) * inv_step[1]) as u32).min(grid_resolution.saturating_sub(1)),
+            (((p[2] - min[2]) * inv_step[2]) as u32).min(grid_resolution.saturating_sub(1)),
+        );
+        let entry = cluster_accum.entry(key).or_insert(([0.0; 3], 0, 0));
+        entry.0[0] += p[0];
+        entry.0[1] += p[1];
+        entry.0[2] += p[2];
+        entry.1 += 1;
+        old_to_cluster_key.push(key);
+    }
+
+    let mut new_vertices: Vec<f32> = Vec::with_capacity(cluster_accum.len() * 3);
+    for (key, entry) in cluster_accum.iter_mut() {
+        let count = entry.1.max(1) as f32;
+        let idx = (new_vertices.len() / 3) as u32;
+        new_vertices.push(entry.0[0] / count);
+        new_vertices.push(entry.0[1] / count);
+        new_vertices.push(entry.0[2] / count);
+        entry.2 = idx;
+        cluster_index.insert(*key, idx);
+    }
+
+    let mut new_indices: Vec<u32> = Vec::with_capacity(indices.len());
+    for tri in indices.chunks_exact(3) {
+        let ka = *old_to_cluster_key.get(tri[0] as usize)
+            .ok_or_else(|| PixieError::MeshOptimizationFailed("index out of range during clustering".to_string()))?;
+        let kb = *old_to_cluster_key.get(tri[1] as usize)
+            .ok_or_else(|| PixieError::MeshOptimizationFailed("index out of range during clustering".to_string()))?;
+        let kc = *old_to_cluster_key.get(tri[2] as usize)
+            .ok_or_else(|| PixieError::MeshOptimizationFailed("index out of range during clustering".to_string()))?;
+        let a = *cluster_index.get(&ka).unwrap();
+        let b = *cluster_index.get(&kb).unwrap();
+        let c = *cluster_index.get(&kc).unwrap();
+        if a != b && b != c && a != c {
+            new_indices.push(a);
+            new_indices.push(b);
+            new_indices.push(c);
+        }
+    }
+
+    Ok((new_vertices, new_indices))
+}
+
+fn grid_resolution_for_target(target_vertex_count: usize) -> u32 {
+    let cube_root = (target_vertex_count as f64).cbrt();
+    let r = cube_root.ceil() as u32;
+    r.max(2)
+}
+
+fn decimate_edge_collapse(
+    vertices: &[f32],
+    indices: &[u32],
+    target_ratio: f32,
+) -> PixieResult<(Vec<f32>, Vec<u32>)> {
+    let original_triangle_count = indices.len() / 3;
+    if original_triangle_count == 0 {
+        return Ok((Vec::new(), Vec::new()));
+    }
+    let target_triangle_count = ((original_triangle_count as f32 * target_ratio).ceil() as usize).max(1);
+
+    let original_vertex_count = vertices.len() / 3;
+    if original_vertex_count == 0 {
+        return Ok((Vec::new(), Vec::new()));
+    }
+
+    let mut working_vertices: Vec<[f32; 3]> = Vec::with_capacity(original_vertex_count);
+    for chunk in vertices.chunks_exact(3) {
+        working_vertices.push([chunk[0], chunk[1], chunk[2]]);
+    }
+
+    let mut working_triangles: Vec<[u32; 3]> = Vec::with_capacity(original_triangle_count);
+    for tri in indices.chunks_exact(3) {
+        working_triangles.push([tri[0], tri[1], tri[2]]);
+    }
+
+    let mut edge_pairs: Vec<(f32, u32, u32)> = Vec::new();
+    for tri in &working_triangles {
+        let edges = [(tri[0], tri[1]), (tri[1], tri[2]), (tri[2], tri[0])];
+        for &(a, b) in &edges {
+            let (lo, hi) = if a < b { (a, b) } else { (b, a) };
+            if lo == hi { continue; }
+            let pa = working_vertices[lo as usize];
+            let pb = working_vertices[hi as usize];
+            let dx = pa[0] - pb[0];
+            let dy = pa[1] - pb[1];
+            let dz = pa[2] - pb[2];
+            let len_sq = dx * dx + dy * dy + dz * dz;
+            edge_pairs.push((len_sq, lo, hi));
+        }
+    }
+
+    edge_pairs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(core::cmp::Ordering::Equal));
+    edge_pairs.dedup_by(|a, b| a.1 == b.1 && a.2 == b.2);
+
+    let mut remap: Vec<u32> = (0..working_vertices.len() as u32).collect();
+    fn root(remap: &mut [u32], mut x: u32) -> u32 {
+        while remap[x as usize] != x {
+            let parent = remap[x as usize];
+            remap[x as usize] = remap[parent as usize];
+            x = remap[x as usize];
+        }
+        x
+    }
+
+    let mut remaining_triangles = original_triangle_count;
+    let mut edge_idx = 0;
+    while remaining_triangles > target_triangle_count && edge_idx < edge_pairs.len() {
+        let (_, lo, hi) = edge_pairs[edge_idx];
+        edge_idx += 1;
+        let ra = root(&mut remap, lo);
+        let rb = root(&mut remap, hi);
+        if ra == rb {
+            continue;
+        }
+        let pa = working_vertices[ra as usize];
+        let pb = working_vertices[rb as usize];
+        working_vertices[ra as usize] = [
+            (pa[0] + pb[0]) * 0.5,
+            (pa[1] + pb[1]) * 0.5,
+            (pa[2] + pb[2]) * 0.5,
+        ];
+        remap[rb as usize] = ra;
+
+        let mut degenerate = 0usize;
+        for tri in &working_triangles {
+            let a = root(&mut remap, tri[0]);
+            let b = root(&mut remap, tri[1]);
+            let c = root(&mut remap, tri[2]);
+            if a == b || b == c || a == c {
+                degenerate += 1;
+            }
+        }
+        remaining_triangles = original_triangle_count - degenerate;
+    }
+
+    finalize_after_remap(&working_vertices, &working_triangles, &mut remap)
+}
+
+fn finalize_after_remap(
+    working_vertices: &[[f32; 3]],
+    working_triangles: &[[u32; 3]],
+    remap: &mut [u32],
+) -> PixieResult<(Vec<f32>, Vec<u32>)> {
+    fn root(remap: &mut [u32], mut x: u32) -> u32 {
+        while remap[x as usize] != x {
+            let parent = remap[x as usize];
+            remap[x as usize] = remap[parent as usize];
+            x = remap[x as usize];
+        }
+        x
+    }
+
+    let mut compact_index: Vec<i32> = vec![-1; working_vertices.len()];
+    let mut new_vertices: Vec<f32> = Vec::new();
+    for tri in working_triangles {
+        for &orig in tri {
+            let r = root(remap, orig) as usize;
+            if compact_index[r] < 0 {
+                compact_index[r] = (new_vertices.len() / 3) as i32;
+                new_vertices.extend_from_slice(&working_vertices[r]);
+            }
+        }
+    }
+
+    let mut new_indices: Vec<u32> = Vec::new();
+    for tri in working_triangles {
+        let a = compact_index[root(remap, tri[0]) as usize];
+        let b = compact_index[root(remap, tri[1]) as usize];
+        let c = compact_index[root(remap, tri[2]) as usize];
+        if a < 0 || b < 0 || c < 0 {
+            continue;
+        }
+        let (au, bu, cu) = (a as u32, b as u32, c as u32);
+        if au != bu && bu != cu && au != cu {
+            new_indices.push(au);
+            new_indices.push(bu);
+            new_indices.push(cu);
+        }
+    }
+
+    Ok((new_vertices, new_indices))
+}
+
+#[derive(Clone, Copy, Default)]
+struct Quadric {
+    m: [f64; 10],
+}
+
+impl Quadric {
+    fn from_plane(a: f64, b: f64, c: f64, d: f64) -> Self {
+        Self {
+            m: [
+                a * a, a * b, a * c, a * d,
+                b * b, b * c, b * d,
+                c * c, c * d,
+                d * d,
+            ],
+        }
+    }
+
+    fn add(&self, other: &Self) -> Self {
+        let mut out = Self::default();
+        for i in 0..10 {
+            out.m[i] = self.m[i] + other.m[i];
+        }
+        out
+    }
+
+    fn eval(&self, x: f64, y: f64, z: f64) -> f64 {
+        let m = &self.m;
+        m[0] * x * x + 2.0 * m[1] * x * y + 2.0 * m[2] * x * z + 2.0 * m[3] * x
+            + m[4] * y * y + 2.0 * m[5] * y * z + 2.0 * m[6] * y
+            + m[7] * z * z + 2.0 * m[8] * z
+            + m[9]
+    }
+}
+
+fn plane_for_triangle(p0: [f32; 3], p1: [f32; 3], p2: [f32; 3]) -> Option<(f64, f64, f64, f64)> {
+    let ex = (p1[0] - p0[0]) as f64;
+    let ey = (p1[1] - p0[1]) as f64;
+    let ez = (p1[2] - p0[2]) as f64;
+    let fx = (p2[0] - p0[0]) as f64;
+    let fy = (p2[1] - p0[1]) as f64;
+    let fz = (p2[2] - p0[2]) as f64;
+    let nx = ey * fz - ez * fy;
+    let ny = ez * fx - ex * fz;
+    let nz = ex * fy - ey * fx;
+    let len = (nx * nx + ny * ny + nz * nz).sqrt();
+    if len < 1e-12 {
+        return None;
+    }
+    let inv = 1.0 / len;
+    let a = nx * inv;
+    let b = ny * inv;
+    let c = nz * inv;
+    let d = -(a * p0[0] as f64 + b * p0[1] as f64 + c * p0[2] as f64);
+    Some((a, b, c, d))
+}
+
+fn decimate_qem(
+    vertices: &[f32],
+    indices: &[u32],
+    target_ratio: f32,
+) -> PixieResult<(Vec<f32>, Vec<u32>)> {
+    let original_triangle_count = indices.len() / 3;
+    let original_vertex_count = vertices.len() / 3;
+    if original_triangle_count == 0 || original_vertex_count == 0 {
+        return Ok((Vec::new(), Vec::new()));
+    }
+    let target_triangle_count = ((original_triangle_count as f32 * target_ratio).ceil() as usize).max(1);
+
+    let mut working_vertices: Vec<[f32; 3]> = Vec::with_capacity(original_vertex_count);
+    for chunk in vertices.chunks_exact(3) {
+        working_vertices.push([chunk[0], chunk[1], chunk[2]]);
+    }
+    let mut working_triangles: Vec<[u32; 3]> = Vec::with_capacity(original_triangle_count);
+    for tri in indices.chunks_exact(3) {
+        working_triangles.push([tri[0], tri[1], tri[2]]);
+    }
+
+    let mut quadrics: Vec<Quadric> = vec![Quadric::default(); original_vertex_count];
+    for tri in &working_triangles {
+        let p0 = working_vertices[tri[0] as usize];
+        let p1 = working_vertices[tri[1] as usize];
+        let p2 = working_vertices[tri[2] as usize];
+        if let Some((a, b, c, d)) = plane_for_triangle(p0, p1, p2) {
+            let q = Quadric::from_plane(a, b, c, d);
+            quadrics[tri[0] as usize] = quadrics[tri[0] as usize].add(&q);
+            quadrics[tri[1] as usize] = quadrics[tri[1] as usize].add(&q);
+            quadrics[tri[2] as usize] = quadrics[tri[2] as usize].add(&q);
+        }
+    }
+
+    let mut edge_costs: Vec<(f64, u32, u32, [f32; 3])> = Vec::new();
+    for tri in &working_triangles {
+        let edges = [(tri[0], tri[1]), (tri[1], tri[2]), (tri[2], tri[0])];
+        for &(a, b) in &edges {
+            let (lo, hi) = if a < b { (a, b) } else { (b, a) };
+            if lo == hi { continue; }
+            let combined = quadrics[lo as usize].add(&quadrics[hi as usize]);
+            let pa = working_vertices[lo as usize];
+            let pb = working_vertices[hi as usize];
+            let midpoint = [
+                (pa[0] + pb[0]) * 0.5,
+                (pa[1] + pb[1]) * 0.5,
+                (pa[2] + pb[2]) * 0.5,
+            ];
+            let cost = combined.eval(midpoint[0] as f64, midpoint[1] as f64, midpoint[2] as f64).max(0.0);
+            edge_costs.push((cost, lo, hi, midpoint));
+        }
+    }
+
+    edge_costs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(core::cmp::Ordering::Equal));
+    edge_costs.dedup_by(|a, b| a.1 == b.1 && a.2 == b.2);
+
+    let mut remap: Vec<u32> = (0..working_vertices.len() as u32).collect();
+    fn root(remap: &mut [u32], mut x: u32) -> u32 {
+        while remap[x as usize] != x {
+            let parent = remap[x as usize];
+            remap[x as usize] = remap[parent as usize];
+            x = remap[x as usize];
+        }
+        x
+    }
+
+    let mut remaining_triangles = original_triangle_count;
+    let mut edge_idx = 0;
+    while remaining_triangles > target_triangle_count && edge_idx < edge_costs.len() {
+        let (_, lo, hi, midpoint) = edge_costs[edge_idx];
+        edge_idx += 1;
+        let ra = root(&mut remap, lo);
+        let rb = root(&mut remap, hi);
+        if ra == rb {
+            continue;
+        }
+        working_vertices[ra as usize] = midpoint;
+        let combined = quadrics[ra as usize].add(&quadrics[rb as usize]);
+        quadrics[ra as usize] = combined;
+        remap[rb as usize] = ra;
+
+        let mut degenerate = 0usize;
+        for tri in &working_triangles {
+            let a = root(&mut remap, tri[0]);
+            let b = root(&mut remap, tri[1]);
+            let c = root(&mut remap, tri[2]);
+            if a == b || b == c || a == c {
+                degenerate += 1;
+            }
+        }
+        remaining_triangles = original_triangle_count - degenerate;
+    }
+
+    finalize_after_remap(&working_vertices, &working_triangles, &mut remap)
 }
 
 #[derive(Clone, Copy)]
@@ -266,9 +555,7 @@ pub fn optimize_vertex_cache_forsyth(
     use_c_hotspots: bool,
 ) -> PixieResult<Vec<u32>> {
     if indices.len() % 3 != 0 {
-        return Err(PixieError::InvalidInput(
-            "Indices must be triangle list".to_string(),
-        ));
+        return Err(PixieError::InvalidInput("Indices must be triangle list".to_string()));
     }
 
     if vertex_count == 0 {
@@ -506,4 +793,63 @@ fn optimize_vertex_cache_forsyth_rust(
     }
 
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cube_mesh() -> (Vec<f32>, Vec<u32>) {
+        let vertices: Vec<f32> = vec![
+            0.0, 0.0, 0.0,  1.0, 0.0, 0.0,  1.0, 1.0, 0.0,  0.0, 1.0, 0.0,
+            0.0, 0.0, 1.0,  1.0, 0.0, 1.0,  1.0, 1.0, 1.0,  0.0, 1.0, 1.0,
+        ];
+        let indices: Vec<u32> = vec![
+            0, 1, 2, 0, 2, 3,
+            4, 6, 5, 4, 7, 6,
+            0, 4, 5, 0, 5, 1,
+            2, 6, 7, 2, 7, 3,
+            0, 3, 7, 0, 7, 4,
+            1, 5, 6, 1, 6, 2,
+        ];
+        (vertices, indices)
+    }
+
+    #[test]
+    fn test_weld_dedupes_coincident_vertices() {
+        let vertices = vec![
+            0.0, 0.0, 0.0,
+            0.0, 0.0, 0.0,
+            1.0, 0.0, 0.0,
+            0.0, 1.0, 0.0,
+        ];
+        let indices = vec![0, 2, 3, 1, 2, 3];
+        let (new_verts, new_indices) = weld_vertices_spatial_hash(&vertices, &indices, 1e-4).unwrap();
+        assert_eq!(new_verts.len() / 3, 3);
+        assert_eq!(new_indices.len(), 3);
+    }
+
+    #[test]
+    fn test_vertex_clustering_reduces() {
+        let (verts, indices) = cube_mesh();
+        let (new_verts, new_indices) = decimate_vertex_clustering(&verts, &indices, 0.5).unwrap();
+        assert!(new_verts.len() / 3 <= verts.len() / 3);
+        assert!(new_indices.len() % 3 == 0);
+    }
+
+    #[test]
+    fn test_qem_reduces() {
+        let (verts, indices) = cube_mesh();
+        let (_new_verts, new_indices) = decimate_qem(&verts, &indices, 0.5).unwrap();
+        assert!(new_indices.len() % 3 == 0);
+        assert!(new_indices.len() / 3 <= indices.len() / 3);
+    }
+
+    #[test]
+    fn test_edge_collapse_reduces() {
+        let (verts, indices) = cube_mesh();
+        let (_new_verts, new_indices) = decimate_edge_collapse(&verts, &indices, 0.5).unwrap();
+        assert!(new_indices.len() % 3 == 0);
+        assert!(new_indices.len() / 3 <= indices.len() / 3);
+    }
 }

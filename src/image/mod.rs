@@ -11,55 +11,38 @@ use image::load_from_memory;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
-// Import console log function for WASM
-#[cfg(target_arch = "wasm32")]
-#[wasm_bindgen]
-extern "C" {
-    #[wasm_bindgen(js_namespace = console)]
-    fn log(s: &str);
-}
+// No-op shim: existing log_to_console call sites compile unchanged and the
+// compiler eliminates them in release builds.
+fn log_to_console(_msg: &str) {}
 
-// Helper function for console logging
-fn log_to_console(msg: &str) {
-    #[cfg(target_arch = "wasm32")]
-    unsafe { log(msg); }
-    
-    #[cfg(not(target_arch = "wasm32"))]
-    let _ = msg; // Suppress unused variable warning for non-WASM builds
-}
-
-// Helper function to detect animated GIFs
+// Returns true when the GIF stream contains more than one image descriptor.
 fn detect_animated_gif(data: &[u8]) -> bool {
     if data.len() < 13 {
         return false;
     }
-    
-    // Check for GIF signature
+
     if !data.starts_with(b"GIF87a") && !data.starts_with(b"GIF89a") {
         return false;
     }
-    
-    let mut pos = 13; // Skip header and logical screen descriptor
+
+    // 13 = 6-byte signature + 7-byte logical screen descriptor.
+    let mut pos = 13;
     let mut image_count = 0;
-    
-    // Skip global color table if present
+
     let flags = data[10];
     if flags & 0x80 != 0 {
         let global_color_table_size = 2_usize.pow(((flags & 0x07) + 1) as u32) * 3;
         pos += global_color_table_size;
     }
-    
-    // Look for multiple image descriptors (0x2C) which indicate animation
+
     while pos < data.len() {
         match data[pos] {
-            0x21 => { // Extension introducer
+            0x21 => {
+                // Extension introducer + label byte, then a sub-block chain.
                 pos += 1;
                 if pos >= data.len() { break; }
-                
                 let _label = data[pos];
                 pos += 1;
-                
-                // Skip extension data
                 while pos < data.len() {
                     let block_size = data[pos] as usize;
                     pos += 1;
@@ -68,15 +51,14 @@ fn detect_animated_gif(data: &[u8]) -> bool {
                     if pos > data.len() { return false; }
                 }
             },
-            0x2C => { // Image descriptor - this is a frame
+            0x2C => {
                 image_count += 1;
                 if image_count > 1 {
-                    return true; // Multiple images = animated
+                    return true;
                 }
-                
-                pos += 10; // Skip image descriptor
-                
-                // Skip local color table if present
+
+                pos += 10;
+
                 if pos < data.len() {
                     let local_flags = data[pos - 1];
                     if local_flags & 0x80 != 0 {
@@ -84,11 +66,10 @@ fn detect_animated_gif(data: &[u8]) -> bool {
                         pos += local_color_table_size;
                     }
                 }
-                
-                // Skip LZW minimum code size
+
+                // LZW minimum code size byte.
                 if pos < data.len() { pos += 1; }
-                
-                // Skip image data
+
                 while pos < data.len() {
                     let block_size = data[pos] as usize;
                     pos += 1;
@@ -97,16 +78,14 @@ fn detect_animated_gif(data: &[u8]) -> bool {
                     if pos > data.len() { return false; }
                 }
             },
-            0x3B => { // Trailer
-                break;
-            },
+            0x3B => break, // Trailer.
             _ => {
                 pos += 1;
             }
         }
     }
-    
-    false // Only one image found = static GIF
+
+    false
 }
 
 pub mod bmp;
@@ -120,7 +99,6 @@ pub mod svg;
 pub mod ico;
 pub mod tga;
 
-// Re-export format detection  
 pub use crate::formats::{detect_image_format};
 pub use crate::formats::ImageFormat as PixieImageFormat;
 
@@ -131,99 +109,41 @@ pub struct ImageOptimizer {
 }
 
 impl ImageOptimizer {
-    /// Create a new image optimizer with the given configuration
     pub fn new(config: ImageOptConfig) -> Self {
         Self { config }
     }
 
-    /// Get the current configuration
     pub fn config(&self) -> &ImageOptConfig {
         &self.config
     }
 
-    /// Optimize an image based on its detected format using the image crate
     pub fn optimize(&self, data: &[u8]) -> OptResult<Vec<u8>> {
         self.optimize_with_quality(data, self.config.quality)
     }
 
-    /// Optimize an image with specific quality parameter using the image crate
     #[cfg(feature = "image")]
     pub fn optimize_with_quality(&self, data: &[u8], quality: u8) -> OptResult<Vec<u8>> {
-        // Debug logging - entry point
-        #[cfg(target_arch = "wasm32")]
-        {
-            let msg = format!("🔥 Image optimization entry: {} bytes, quality {}%", data.len(), quality);
-            log_to_console(&msg);
-        }
-        
-        // Detect the original format first
         let format = detect_image_format(data);
         
-        #[cfg(target_arch = "wasm32")]
-        {
-            match &format {
-                Ok(f) => {
-                    let msg = format!("🔍 Detected format: {:?}", f);
-                    log_to_console(&msg);
-                },
-                Err(e) => {
-                    let msg = format!("❌ Format detection failed: {:?}", e);
-                    log_to_console(&msg);
-                }
-            }
-        }
-        
         let format = format?;
-        
-        // Handle formats that need special processing before loading
+
         match format {
             PixieImageFormat::WebP => {
-                #[cfg(target_arch = "wasm32")]
-                log_to_console("🎯 Routing to WebP-specific optimization");
-                
-                // Use comprehensive WebP optimizer with all strategies
-                let result = webp::optimize_webp_with_config(data, quality, &self.config)
+                return webp::optimize_webp_with_config(data, quality, &self.config)
                     .map_err(|e| OptError::ProcessingError(format!("{:?}", e)));
-                
-                #[cfg(target_arch = "wasm32")]
-                {
-                    match &result {
-                        Ok(optimized) => {
-                            let compression = ((data.len() - optimized.len()) as f64 / data.len() as f64) * 100.0;
-                            let msg = format!("✅ WebP optimization returned: {} -> {} bytes ({:.2}% compression)", 
-                                            data.len(), optimized.len(), compression);
-                            log_to_console(&msg);
-                        },
-                        Err(e) => {
-                            let msg = format!("❌ WebP optimization failed: {:?}", e);
-                            log_to_console(&msg);
-                        }
-                    }
-                }
-                
-                return result;
             },
-            // SVG optimization disabled - dependency issues
             PixieImageFormat::Svg => {
-                // ✅ ENABLED: SVG optimization with   approach
                 return svg::optimize_svg(data, quality, &self.config)
                     .map_err(|e| OptError::ProcessingError(format!("{:?}", e)));
             },
             PixieImageFormat::Ico => {
-                // Use dedicated ICO optimizer directly
                 return ico::optimize_ico(data, quality, &self.config);
             },
             PixieImageFormat::Tga => {
-                // ✅ NEW: TGA optimization
-                #[cfg(target_arch = "wasm32")]
-                log_to_console("🎯 Routing to TGA-specific optimization");
-                
                 return tga::optimize_tga_with_quality(data, quality)
                     .map_err(|e| OptError::ProcessingError(format!("TGA optimization failed: {:?}", e)));
             },
-            _ => {
-                // Continue with standard image crate processing
-            }
+            _ => {}
         }
         
         // Try to load the image using the image crate for standard formats
@@ -433,21 +353,8 @@ impl ImageOptimizer {
         }
         
         // Log the optimization result for debugging
-        let savings = ((original_size as f64 - best_output.len() as f64) / original_size as f64 * 100.0) as i32;
-        if savings > 0 {
-            // Use console.log for WASM debugging
-            #[cfg(target_arch = "wasm32")]
-            {
-                use wasm_bindgen::prelude::*;
-                #[wasm_bindgen]
-                extern "C" {
-                    #[wasm_bindgen(js_namespace = console)]
-                    fn log(s: &str);
-                }
-                log(&format!("Image optimization: {} bytes → {} bytes ({savings}% reduction)", original_size, best_output.len()));
-            }
-        }
-        
+        let _ = original_size;
+
         Ok(best_output)
     }
 
@@ -465,46 +372,22 @@ impl ImageOptimizer {
         // Detect the original format first
         let format = detect_image_format(data)?;
         
-        // CRITICAL: Check for animations first - they need special handling even in fast path
+        // Animations need full optimization even on the fast path; otherwise we'd
+        // strip frames or convert to a static format.
         match format {
             PixieImageFormat::Gif => {
-                // Check if it's an animated GIF
-                #[cfg(target_arch = "wasm32")]
-                log_to_console("🎬 Fast path: Detected GIF - checking for animation");
-                
                 if crate::image::gif::detect_animated_gif(data) {
-                    #[cfg(target_arch = "wasm32")]
-                    log_to_console("🎬 Fast path: Animated GIF detected - using full animation optimization");
-                    
-                    // Use full GIF optimization even in fast path for animations
                     return crate::image::gif::optimize_gif_rust(data, quality, &ImageOptConfig::default())
                         .map_err(|e| OptError::ProcessingError(format!("{}", e)));
-                } else {
-                    #[cfg(target_arch = "wasm32")]
-                    log_to_console("🖼️ Fast path: Static GIF - converting to PNG for better compression");
                 }
             },
             PixieImageFormat::WebP => {
-                // Check if it's an animated WebP
-                #[cfg(target_arch = "wasm32")]
-                log_to_console("🎬 Fast path: Detected WebP - checking for animation");
-                
                 if crate::image::webp::detect_animated_webp(data) {
-                    #[cfg(target_arch = "wasm32")]
-                    log_to_console("🎬 Fast path: Animated WebP detected - using full animation optimization");
-                    
-                    // Use full WebP optimization even in fast path for animations
                     return crate::image::webp::optimize_webp_rust(data, quality)
                         .map_err(|e| OptError::ProcessingError(format!("{}", e)));
-                } else {
-                    #[cfg(target_arch = "wasm32")]
-                    log_to_console("🖼️ Fast path: Static WebP - continuing with fast optimization");
                 }
             },
-            _ => {
-                #[cfg(target_arch = "wasm32")]
-                log_to_console("🖼️ Fast path: Non-animation format - using fast optimization");
-            }
+            _ => {}
         }
         
         // For large files, use only the most efficient optimizations for non-animated content
@@ -619,11 +502,46 @@ impl ImageOptimizer {
         Err(OptError::UnsupportedFormat("Image processing not available - missing image feature".into()))
     }
 
-    /// Analyze image format and basic properties
     pub fn analyze(&self, data: &[u8]) -> OptResult<crate::types::ImageInfo> {
-        let _format = detect_image_format(data)?;
-        // TODO: Return actual image analysis using image crate
-        Ok(crate::types::ImageInfo::default())
+        let format = detect_image_format(data)?;
+
+        #[cfg(feature = "image")]
+        {
+            let img = load_from_memory(data)
+                .map_err(|e| OptError::InvalidFormat(format!("image decode failed: {}", e)))?;
+            let (width, height) = (img.width(), img.height());
+            let color = img.color();
+            let (channels, has_alpha, bit_depth) = match color {
+                image::ColorType::L8 => (1, false, 8),
+                image::ColorType::La8 => (2, true, 8),
+                image::ColorType::Rgb8 => (3, false, 8),
+                image::ColorType::Rgba8 => (4, true, 8),
+                image::ColorType::L16 => (1, false, 16),
+                image::ColorType::La16 => (2, true, 16),
+                image::ColorType::Rgb16 => (3, false, 16),
+                image::ColorType::Rgba16 => (4, true, 16),
+                image::ColorType::Rgb32F => (3, false, 32),
+                image::ColorType::Rgba32F => (4, true, 32),
+                _ => (4, true, 8),
+            };
+            return Ok(crate::types::ImageInfo {
+                width,
+                height,
+                channels,
+                bit_depth,
+                format: format!("{:?}", format),
+                has_alpha,
+                color_space: crate::types::ColorSpace::RGB,
+                compression: None,
+                file_size: Some(data.len()),
+            });
+        }
+
+        #[cfg(not(feature = "image"))]
+        {
+            let _ = format;
+            Ok(crate::types::ImageInfo::default())
+        }
     }
 }
 

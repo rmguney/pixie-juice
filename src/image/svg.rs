@@ -1,16 +1,14 @@
 extern crate alloc;
-use alloc::{vec::Vec, string::ToString, string::String, format};
+use alloc::{vec::Vec, string::{ToString, String}, format};
 use crate::types::{PixieResult, ImageOptConfig, PixieError};
 
 pub fn is_svg(data: &[u8]) -> bool {
     if data.len() < 5 {
         return false;
     }
-    
     let text = core::str::from_utf8(data).unwrap_or("");
-    
-    text.trim_start().starts_with("<?xml") && text.contains("<svg") ||
-    text.trim_start().starts_with("<svg")
+    let trimmed = text.trim_start();
+    (trimmed.starts_with("<?xml") && text.contains("<svg")) || trimmed.starts_with("<svg")
 }
 
 #[cfg(feature = "codec-svg")]
@@ -18,81 +16,13 @@ pub fn optimize_svg(data: &[u8], quality: u8, config: &ImageOptConfig) -> PixieR
     if !is_svg(data) {
         return Err(PixieError::InvalidImageFormat("Not a valid SVG file".to_string()));
     }
-    
-    if config.lossless && quality > 90 {
-        return optimize_svg_conservative(data);
-    }
-    
-    let preprocessed = apply_svg_c_hotspot_preprocessing(data, quality)?;
-    
-    let strategies = get_svg_optimization_strategies(quality);
-    let mut best_result = preprocessed;
-    let mut best_size = best_result.len();
-    
-    for strategy in strategies {
-        if let Ok(optimized) = apply_svg_optimization_strategy(&best_result, strategy) {
-            if optimized.len() < best_size {
-                best_result = optimized;
-                best_size = best_result.len();
-            }
-        }
-    }
-    
-    if best_result.len() < data.len() {
-        Ok(best_result)
+
+    let result = optimize_svg_xml(data, quality, config)?;
+    if result.len() < data.len() {
+        Ok(result)
     } else {
         Ok(data.to_vec())
     }
-}
-
-fn apply_svg_c_hotspot_preprocessing(data: &[u8], quality: u8) -> PixieResult<Vec<u8>> {
-    #[cfg(c_hotspots_available)]
-    {
-        let mut current_data = data.to_vec();
-        
-        if quality <= 70 {
-            current_data = crate::c_hotspots::svg_text_compress(&current_data)?;
-        }
-        
-        if quality <= 80 {
-            current_data = crate::c_hotspots::svg_minify_markup(&current_data)?;
-        }
-        
-        if quality <= 60 {
-            current_data = crate::c_hotspots::svg_optimize_paths_c(&current_data)?;
-        }
-        
-        Ok(current_data)
-    }
-    #[cfg(not(c_hotspots_available))]
-    {
-        let svg_text = core::str::from_utf8(data)
-            .map_err(|e| PixieError::ImageDecodingFailed(format!("SVG UTF-8 error: {:?}", e)))?;
-        optimize_svg_text_fallback(svg_text, quality)
-    }
-}
-
-fn optimize_svg_text_fallback(svg_text: &str, quality: u8) -> PixieResult<Vec<u8>> {
-    let mut result = svg_text.to_string();
-    
-    result = result.split("<!--").collect::<Vec<_>>().into_iter()
-        .enumerate()
-        .filter_map(|(i, part)| {
-            if i == 0 {
-                Some(part.to_string())
-            } else if let Some(end) = part.find("-->") {
-                Some(part[end + 3..].to_string())
-            } else {
-                None
-            }
-        })
-        .collect::<String>();
-    
-    if quality <= 60 {
-        result = result.split_whitespace().collect::<Vec<_>>().join(" ");
-    }
-    
-    Ok(result.into_bytes())
 }
 
 #[cfg(not(feature = "codec-svg"))]
@@ -100,351 +30,300 @@ pub fn optimize_svg(data: &[u8], _quality: u8, _config: &ImageOptConfig) -> Pixi
     if !is_svg(data) {
         return Err(PixieError::InvalidImageFormat("Not a valid SVG file".to_string()));
     }
-    
-    optimize_svg_text(data)
+    Ok(data.to_vec())
 }
 
-#[derive(Debug, Clone)]
-enum SvgOptimizationStrategy {
-    CleanupMetadata,
-    RemoveUnused,
-    OptimizePaths,
-    OptimizeColors,
-    MergeDuplicates,
-    AggressiveOptimization,
-}
+#[cfg(feature = "codec-svg")]
+fn optimize_svg_xml(data: &[u8], quality: u8, config: &ImageOptConfig) -> PixieResult<Vec<u8>> {
+    use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
+    use quick_xml::reader::Reader;
+    use quick_xml::writer::Writer;
 
-fn get_svg_optimization_strategies(quality: u8) -> Vec<SvgOptimizationStrategy> {
-    let mut strategies = Vec::new();
-    
-    strategies.push(SvgOptimizationStrategy::CleanupMetadata);
-    
-    if quality <= 80 {
-        strategies.push(SvgOptimizationStrategy::RemoveUnused);
-        strategies.push(SvgOptimizationStrategy::OptimizeColors);
-    }
-    
-    if quality <= 60 {
-        strategies.push(SvgOptimizationStrategy::OptimizePaths);
-        strategies.push(SvgOptimizationStrategy::MergeDuplicates);
-    }
-    
-    if quality <= 40 {
-        strategies.push(SvgOptimizationStrategy::AggressiveOptimization);
-    }
-    
-    strategies
-}
+    let aggressive = quality <= 60 && !config.lossless;
+    let strip_metadata = !config.preserve_metadata || aggressive;
 
-fn apply_svg_optimization_strategy(data: &[u8], strategy: SvgOptimizationStrategy) -> PixieResult<Vec<u8>> {
-    let svg_text = core::str::from_utf8(data)
-        .map_err(|e| PixieError::ImageDecodingFailed(format!("SVG UTF-8 error: {:?}", e)))?;
-    
-    match strategy {
-        SvgOptimizationStrategy::CleanupMetadata => cleanup_svg_metadata(svg_text),
-        SvgOptimizationStrategy::RemoveUnused => remove_unused_elements(svg_text),
-        SvgOptimizationStrategy::OptimizePaths => optimize_svg_paths(svg_text),
-        SvgOptimizationStrategy::OptimizeColors => optimize_svg_colors(svg_text),
-        SvgOptimizationStrategy::MergeDuplicates => merge_duplicate_elements(svg_text),
-        SvgOptimizationStrategy::AggressiveOptimization => aggressive_svg_optimization(svg_text),
-    }
-}
+    let mut reader = Reader::from_reader(data);
+    reader.config_mut().trim_text(false);
+    reader.config_mut().expand_empty_elements = false;
+    reader.config_mut().check_end_names = false;
 
-fn optimize_svg_conservative(data: &[u8]) -> PixieResult<Vec<u8>> {
-    let svg_text = core::str::from_utf8(data)
-        .map_err(|e| PixieError::ImageDecodingFailed(format!("SVG UTF-8 error: {:?}", e)))?;
-    
-    cleanup_svg_metadata(svg_text)
-}
+    let mut writer = Writer::new(Vec::with_capacity(data.len()));
+    let mut buf = Vec::new();
+    let mut skip_element_depth: i32 = 0;
+    let mut skip_until_tag: Option<Vec<u8>> = None;
 
-fn cleanup_svg_metadata(svg_text: &str) -> PixieResult<Vec<u8>> {
-    let mut result = String::with_capacity(svg_text.len());
-    let mut i = 0;
-    let bytes = svg_text.as_bytes();
-    
-    while i < bytes.len() {
-          if bytes[i] == b'<' && i + 4 < bytes.len() &&
-              &bytes[i..i+4] == b"<!--" {
-            i += 4;
-            while i + 2 < bytes.len() {
-                if &bytes[i..i+3] == b"-->" {
-                    i += 3;
-                    break;
-                }
-                i += 1;
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Err(e) => {
+                return Err(PixieError::ImageDecodingFailed(format!("SVG parse error: {}", e)));
             }
-            continue;
-        }
-        
-        let ch = bytes[i] as char;
-        
-        if ch.is_whitespace() {
-            if !result.chars().last().map_or(false, |c| c.is_whitespace()) {
-                result.push(' ');
-            }
-        } else {
-            result.push(ch);
-        }
-        
-        i += 1;
-    }
-    
-    Ok(result.trim().as_bytes().to_vec())
-}
-
-fn remove_unused_elements(svg_text: &str) -> PixieResult<Vec<u8>> {
-    let mut result = svg_text.to_string();
-    
-    result = result.replace("<defs></defs>", "");
-    result = result.replace("<defs/>", "");
-    
-    result = result.replace("<g></g>", "");
-    result = result.replace("<g/>", "");
-    
-    Ok(result.as_bytes().to_vec())
-}
-
-fn optimize_svg_paths(svg_text: &str) -> PixieResult<Vec<u8>> {
-    let mut result = svg_text.to_string();
-    
-    result = result.replace(" ,", ",");
-    result = result.replace(", ", ",");
-    result = result.replace("  ", " ");
-    
-    
-    Ok(result.as_bytes().to_vec())
-}
-
-fn optimize_svg_colors(svg_text: &str) -> PixieResult<Vec<u8>> {
-    let mut result = svg_text.to_string();
-    
-    result = result.replace("#000000", "#000");
-    result = result.replace("#ffffff", "#fff");
-    result = result.replace("#ff0000", "#f00");
-    result = result.replace("#00ff00", "#0f0");
-    result = result.replace("#0000ff", "#00f");
-    
-    
-    Ok(result.as_bytes().to_vec())
-}
-
-fn merge_duplicate_elements(svg_text: &str) -> PixieResult<Vec<u8>> {
-    let result = svg_text.to_string();
-    
-    
-    Ok(result.as_bytes().to_vec())
-}
-
-fn aggressive_svg_optimization(svg_text: &str) -> PixieResult<Vec<u8>> {
-    let mut result = svg_text.to_string();
-    
-    while let Some(start) = result.find("<!--") {
-        if let Some(end) = result[start..].find("-->") {
-            result.replace_range(start..start + end + 3, "");
-        } else {
-            break;
-        }
-    }
-    
-    result = result.replace(" xmlns=\"http://www.w3.org/2000/svg\"", "");
-    result = result.replace(" version=\"1.1\"", "");
-    
-    result = result.replace("\n", "").replace("\t", "").replace("  ", " ");
-    
-    Ok(result.trim().as_bytes().to_vec())
-}
-
-pub fn convert_svg_to_raster(data: &[u8], quality: u8, _target_width: u32, _target_height: u32) -> PixieResult<Vec<u8>> {
-    #[cfg(all(feature = "codec-svg", not(target_arch = "wasm32")))]
-    {
-        let svg_text = core::str::from_utf8(data)
-            .map_err(|e| PixieError::ImageDecodingFailed(format!("SVG UTF-8 error: {:?}", e)))?;
-        
-        if quality <= 50 {
-            aggressive_svg_optimization(svg_text)
-        } else {
-            optimize_svg_text(data)
-        }
-    }
-    
-    #[cfg(not(all(feature = "codec-svg", not(target_arch = "wasm32"))))]
-    {
-        let _ = quality;
-        optimize_svg_text(data)
-    }
-}
-
-fn has_transparency_in_svg(svg_text: &str) -> bool {
-    svg_text.contains("opacity") || 
-    svg_text.contains("fill-opacity") || 
-    svg_text.contains("stroke-opacity") ||
-    svg_text.contains("rgba") ||
-    svg_text.contains("transparent")
-}
-
-fn optimize_svg_text(data: &[u8]) -> PixieResult<Vec<u8>> {
-    let svg_text = core::str::from_utf8(data)
-        .map_err(|e| PixieError::ProcessingError(format!("SVG UTF-8 error: {:?}", e)))?;
-    
-    let mut optimized = String::with_capacity(svg_text.len());
-    let mut in_whitespace = false;
-    let mut prev_char = ' ';
-    
-    for ch in svg_text.chars() {
-        match ch {
-            ' ' | '\t' | '\n' | '\r' => {
-                if !in_whitespace && prev_char != '>' && prev_char != '<' {
-                    optimized.push(' ');
-                    in_whitespace = true;
-                }
-            }
-            _ => {
-                optimized.push(ch);
-                in_whitespace = false;
-            }
-        }
-        prev_char = ch;
-    }
-    
-    let optimized = remove_svg_comments(&optimized);
-    let optimized = remove_svg_metadata(&optimized);
-    
-    Ok(optimized.into_bytes())
-}
-
-fn remove_svg_comments(svg: &str) -> String {
-    let mut result = String::with_capacity(svg.len());
-    let mut chars = svg.chars().peekable();
-    
-    while let Some(ch) = chars.next() {
-        if ch == '<' && chars.peek() == Some(&'!') {
-            let mut temp = String::new();
-            temp.push(ch);
-            
-            let mut ahead_chars = chars.clone();
-            for _ in 0..3 {
-                if let Some(next_ch) = ahead_chars.next() {
-                    temp.push(next_ch);
-                }
-            }
-            
-            if temp.starts_with("<!--") {
-                let mut comment_depth = 1;
-                while comment_depth > 0 && chars.peek().is_some() {
-                    let next_ch = chars.next().unwrap();
-                    if next_ch == '-' && chars.peek() == Some(&'-') {
-                        chars.next();
-                        if chars.peek() == Some(&'>') {
-                            chars.next();
-                            comment_depth -= 1;
+            Ok(Event::Eof) => break,
+            Ok(event) => {
+                if let Some(target) = &skip_until_tag {
+                    if let Event::End(ref end) = event {
+                        if end.name().as_ref() == target.as_slice() && skip_element_depth == 1 {
+                            skip_until_tag = None;
+                            skip_element_depth = 0;
+                            buf.clear();
+                            continue;
                         }
                     }
+                    if let Event::Start(ref start) = event {
+                        if start.name().as_ref() == target.as_slice() {
+                            skip_element_depth += 1;
+                        }
+                    }
+                    if let Event::End(ref end) = event {
+                        if end.name().as_ref() == target.as_slice() {
+                            skip_element_depth -= 1;
+                            if skip_element_depth <= 0 {
+                                skip_until_tag = None;
+                                skip_element_depth = 0;
+                            }
+                        }
+                    }
+                    buf.clear();
+                    continue;
                 }
-            } else {
-                result.push(ch);
+
+                match event {
+                    Event::Decl(_) => {
+                        if !strip_metadata {
+                            let xml_decl = quick_xml::events::BytesDecl::new("1.0", Some("UTF-8"), None);
+                            writer.write_event(Event::Decl(xml_decl))
+                                .map_err(|e| PixieError::ProcessingError(format!("XML write error: {}", e)))?;
+                        }
+                    }
+                    Event::DocType(_) => {
+                        if !strip_metadata {
+                            writer.write_event(event)
+                                .map_err(|e| PixieError::ProcessingError(format!("XML write error: {}", e)))?;
+                        }
+                    }
+                    Event::Comment(_) => {
+                        // always strip comments
+                    }
+                    Event::PI(_) => {
+                        if !strip_metadata {
+                            writer.write_event(event)
+                                .map_err(|e| PixieError::ProcessingError(format!("XML write error: {}", e)))?;
+                        }
+                    }
+                    Event::Start(start) => {
+                        let name_bytes = start.name().as_ref().to_vec();
+                        if strip_metadata && is_metadata_tag(&name_bytes) {
+                            skip_until_tag = Some(name_bytes);
+                            skip_element_depth = 1;
+                            buf.clear();
+                            continue;
+                        }
+                        let cleaned = rewrite_start_tag(&start, aggressive)?;
+                        writer.write_event(Event::Start(cleaned))
+                            .map_err(|e| PixieError::ProcessingError(format!("XML write error: {}", e)))?;
+                    }
+                    Event::Empty(start) => {
+                        let name_bytes = start.name().as_ref().to_vec();
+                        if strip_metadata && is_metadata_tag(&name_bytes) {
+                            buf.clear();
+                            continue;
+                        }
+                        let cleaned = rewrite_start_tag(&start, aggressive)?;
+                        writer.write_event(Event::Empty(cleaned))
+                            .map_err(|e| PixieError::ProcessingError(format!("XML write error: {}", e)))?;
+                    }
+                    Event::End(end) => {
+                        let name_bytes = end.name().as_ref().to_vec();
+                        if strip_metadata && is_metadata_tag(&name_bytes) {
+                            buf.clear();
+                            continue;
+                        }
+                        writer.write_event(Event::End(BytesEnd::new(String::from_utf8_lossy(&name_bytes).to_string())))
+                            .map_err(|e| PixieError::ProcessingError(format!("XML write error: {}", e)))?;
+                    }
+                    Event::Text(text) => {
+                        let raw = text.into_inner();
+                        let s = core::str::from_utf8(&raw).unwrap_or("");
+                        if !s.chars().all(|c| c.is_whitespace()) {
+                            writer.write_event(Event::Text(BytesText::from_escaped(s.to_string())))
+                                .map_err(|e| PixieError::ProcessingError(format!("XML write error: {}", e)))?;
+                        }
+                    }
+                    Event::CData(_) => {
+                        writer.write_event(event)
+                            .map_err(|e| PixieError::ProcessingError(format!("XML write error: {}", e)))?;
+                    }
+                    Event::Eof => break,
+                }
             }
-        } else {
-            result.push(ch);
         }
+        buf.clear();
     }
-    
-    result
+
+    Ok(writer.into_inner())
 }
 
-fn remove_svg_metadata(svg: &str) -> String {
-    let lines: Vec<&str> = svg.lines().collect();
-    let mut filtered_lines = Vec::new();
-    let mut in_metadata = false;
-    
-    for line in lines {
-        let trimmed = line.trim();
-        
-        if trimmed.starts_with("<?xml") {
+#[cfg(feature = "codec-svg")]
+fn rewrite_start_tag<'a>(
+    start: &quick_xml::events::BytesStart<'a>,
+    aggressive: bool,
+) -> PixieResult<quick_xml::events::BytesStart<'static>> {
+    use quick_xml::events::attributes::Attribute;
+    use quick_xml::events::BytesStart;
+
+    let name_string = core::str::from_utf8(start.name().as_ref())
+        .map_err(|_| PixieError::ImageDecodingFailed("SVG element name not valid UTF-8".to_string()))?
+        .to_string();
+
+    let mut out = BytesStart::new(name_string);
+
+    for attr_result in start.attributes() {
+        let attr = attr_result
+            .map_err(|e| PixieError::ImageDecodingFailed(format!("SVG attribute parse error: {}", e)))?;
+        let key_owned = attr.key.as_ref().to_vec();
+        let value = attr.unescape_value()
+            .map_err(|e| PixieError::ImageDecodingFailed(format!("SVG attribute unescape error: {}", e)))?
+            .to_string();
+
+        if aggressive && should_drop_attribute(&key_owned, &value) {
             continue;
         }
-        
-        if trimmed.starts_with("<!DOCTYPE") {
-            continue;
-        }
-        
-        if trimmed.starts_with("<metadata") || trimmed.starts_with("<title") || 
-           trimmed.starts_with("<desc") {
-            in_metadata = true;
-        }
-        
-        if !in_metadata {
-            filtered_lines.push(line);
-        }
-        
-        if trimmed.contains("</metadata>") || trimmed.contains("</title>") || 
-           trimmed.contains("</desc>") {
-            in_metadata = false;
-        }
+
+        let new_value = if is_color_attribute(&key_owned) {
+            shorten_hex_color(&value)
+        } else {
+            value
+        };
+
+        let key_str = core::str::from_utf8(&key_owned)
+            .map_err(|_| PixieError::ImageDecodingFailed("SVG attribute name not valid UTF-8".to_string()))?
+            .to_string();
+        out.push_attribute(Attribute {
+            key: quick_xml::name::QName(key_str.as_bytes()),
+            value: alloc::borrow::Cow::Owned(new_value.into_bytes()),
+        });
     }
-    
-    filtered_lines.join("\n")
+
+    Ok(out.into_owned())
+}
+
+fn is_metadata_tag(name: &[u8]) -> bool {
+    let stripped = strip_xml_namespace(name);
+    matches!(stripped, b"metadata" | b"title" | b"desc")
+}
+
+fn strip_xml_namespace(name: &[u8]) -> &[u8] {
+    match name.iter().rposition(|&b| b == b':') {
+        Some(idx) => &name[idx + 1..],
+        None => name,
+    }
+}
+
+fn is_color_attribute(key: &[u8]) -> bool {
+    let stripped = strip_xml_namespace(key);
+    matches!(
+        stripped,
+        b"fill" | b"stroke" | b"stop-color" | b"flood-color" | b"color" | b"lighting-color" | b"solid-color"
+    )
+}
+
+fn should_drop_attribute(key: &[u8], value: &str) -> bool {
+    let stripped = strip_xml_namespace(key);
+    match stripped {
+        b"version" => value == "1.0" || value == "1.1" || value == "1.2",
+        b"xmlns:dc" | b"xmlns:cc" | b"xmlns:rdf" | b"xmlns:sodipodi" | b"xmlns:inkscape" => true,
+        _ => false,
+    }
+}
+
+fn shorten_hex_color(value: &str) -> String {
+    let trimmed = value.trim();
+    if !trimmed.starts_with('#') || trimmed.len() != 7 {
+        return value.to_string();
+    }
+    let bytes = trimmed.as_bytes();
+    let pairs = [(1, 2), (3, 4), (5, 6)];
+    let mut compact = String::with_capacity(4);
+    compact.push('#');
+    for (a, b) in pairs {
+        let ca = bytes[a].to_ascii_lowercase();
+        let cb = bytes[b].to_ascii_lowercase();
+        if ca != cb {
+            return value.to_string();
+        }
+        compact.push(ca as char);
+    }
+    compact
+}
+
+pub fn convert_svg_to_raster(data: &[u8], _quality: u8, _target_width: u32, _target_height: u32) -> PixieResult<Vec<u8>> {
+    if !is_svg(data) {
+        return Err(PixieError::InvalidFormat("Not a valid SVG file".to_string()));
+    }
+    Ok(data.to_vec())
 }
 
 pub fn get_svg_info(data: &[u8]) -> PixieResult<(u32, u32, u8)> {
     if !is_svg(data) {
         return Err(PixieError::InvalidFormat("Not a valid SVG file".to_string()));
     }
-    
+
     let svg_text = core::str::from_utf8(data)
         .map_err(|e| PixieError::ProcessingError(format!("SVG UTF-8 error: {:?}", e)))?;
-    
+
     if let Some(svg_start) = svg_text.find("<svg") {
-        let svg_tag_end = svg_text[svg_start..].find('>').unwrap_or(svg_text.len() - svg_start) + svg_start;
+        let svg_tag_end = svg_text[svg_start..].find('>').map(|i| i + svg_start).unwrap_or(svg_text.len());
         let svg_tag = &svg_text[svg_start..svg_tag_end];
-        
+
         let width = extract_svg_dimension(svg_tag, "width").unwrap_or(100);
         let height = extract_svg_dimension(svg_tag, "height").unwrap_or(100);
-        
+
         return Ok((width, height, 8));
     }
-    
+
     Ok((100, 100, 8))
 }
 
 fn extract_svg_dimension(svg_tag: &str, attr: &str) -> Option<u32> {
-    if let Some(attr_start) = svg_tag.find(&format!("{}=\"", attr)) {
-        let value_start = attr_start + attr.len() + 2;
-        if let Some(value_end) = svg_tag[value_start..].find('"') {
-            let value = &svg_tag[value_start..value_start + value_end];
-            
-            let numeric_part: String = value.chars()
-                .take_while(|c| c.is_ascii_digit() || *c == '.')
-                .collect();
-            
-            numeric_part.parse::<f32>().ok().map(|f| f as u32)
-        } else {
-            None
-        }
-    } else {
-        None
-    }
+    let prefix = format!("{}=\"", attr);
+    let attr_start = svg_tag.find(&prefix)?;
+    let value_start = attr_start + prefix.len();
+    let value_end = svg_tag[value_start..].find('"')?;
+    let value = &svg_tag[value_start..value_start + value_end];
+
+    let numeric_part: String = value
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.')
+        .collect();
+
+    numeric_part.parse::<f32>().ok().map(|f| f as u32)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_svg_detection() {
-        let svg_header = b"<svg xmlns=\"http://www.w3.org/2000/svg\">";
-        assert!(is_svg(svg_header));
-        
-        let xml_svg = b"<?xml version=\"1.0\"?><svg>";
-        assert!(is_svg(xml_svg));
-        
-        let not_svg = b"\x89PNG\r\n\x1a\n";
-        assert!(!is_svg(not_svg));
+        assert!(is_svg(b"<svg xmlns=\"http://www.w3.org/2000/svg\">"));
+        assert!(is_svg(b"<?xml version=\"1.0\"?><svg>"));
+        assert!(!is_svg(b"\x89PNG\r\n\x1a\n"));
     }
-    
+
     #[test]
-    fn test_svg_comment_removal() {
-        let svg_with_comments = "<!-- This is a comment --><svg>content</svg>";
-        let result = remove_svg_comments(svg_with_comments);
-        assert_eq!(result, "<svg>content</svg>");
+    fn test_shorten_hex_color() {
+        assert_eq!(shorten_hex_color("#000000"), "#000");
+        assert_eq!(shorten_hex_color("#ffffff"), "#fff");
+        assert_eq!(shorten_hex_color("#aabbcc"), "#abc");
+        assert_eq!(shorten_hex_color("#123456"), "#123456");
+        assert_eq!(shorten_hex_color("red"), "red");
+    }
+
+    #[test]
+    fn test_metadata_tag_detection() {
+        assert!(is_metadata_tag(b"metadata"));
+        assert!(is_metadata_tag(b"title"));
+        assert!(is_metadata_tag(b"desc"));
+        assert!(is_metadata_tag(b"svg:title"));
+        assert!(!is_metadata_tag(b"path"));
     }
 }

@@ -23,6 +23,11 @@ export async function initWasm(): Promise<WasmModule> {
       optimize_gif: wasmPkg.optimize_gif,
       optimize_ico: wasmPkg.optimize_ico,
       optimize_tga: wasmPkg.optimize_tga,
+      optimize_obj: wasmPkg.optimize_obj,
+      optimize_stl: wasmPkg.optimize_stl,
+      optimize_ply: wasmPkg.optimize_ply,
+      optimize_gltf: wasmPkg.optimize_gltf,
+      optimize_fbx: wasmPkg.optimize_fbx,
       is_webp: wasmPkg.is_webp,
       is_gif: wasmPkg.is_gif,
       is_ico: wasmPkg.is_ico,
@@ -55,7 +60,6 @@ export async function initWasm(): Promise<WasmModule> {
     return wasmModule;
     
   } catch (error) {
-    console.error('Failed to initialize WASM module:', error);
     throw new Error(`WASM initialization failed: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
