@@ -1,0 +1,47 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "native",
+      "displayName": "Native (tests)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/../build/native",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "PIXIE_BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "native-asan",
+      "displayName": "Native with AddressSanitizer (+ UBSan on GCC/Clang)",
+      "inherits": "native",
+      "binaryDir": "${sourceDir}/../build/native-asan",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "PIXIE_SANITIZE": "ON"
+      }
+    },
+    {
+      "name": "wasm",
+      "displayName": "WebAssembly (Emscripten)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/../build/wasm",
+      "toolchainFile": "$env{EMSDK}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "PIXIE_BUILD_TESTS": "OFF",
+        "CMAKE_C_FLAGS": "-msimd128",
+        "CMAKE_CXX_FLAGS": "-msimd128 -fno-exceptions"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "native", "configurePreset": "native" },
+    { "name": "native-asan", "configurePreset": "native-asan" },
+    { "name": "wasm", "configurePreset": "wasm" }
+  ],
+  "testPresets": [
+    { "name": "native", "configurePreset": "native", "output": { "outputOnFailure": true } },
+    { "name": "native-asan", "configurePreset": "native-asan", "output": { "outputOnFailure": true } }
+  ]
+}

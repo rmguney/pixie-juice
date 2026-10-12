@@ -1,0 +1,27 @@
+# Native and WASM build trees (CMake presets write to build/)
+build/
+
+# Editors and OS files
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+npm-debug.log*
+
+# Web app
+web/node_modules/
+web/dist/
+web/test-results/
+web/coverage/
+*.tsbuildinfo
+launch.json

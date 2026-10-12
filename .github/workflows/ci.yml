@@ -1,0 +1,102 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  EMSCRIPTEN_VERSION: 6.0.12
+
+jobs:
+  wasm-fresh:
+    name: Committed WASM rebuilt with core changes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # Vercel ships web/src/core/generated as committed, so a core change without a rebuild deploys a stale engine.
+      - name: Check
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [ -z "$BASE" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            echo "No base commit to compare against; skipping."
+            exit 0
+          fi
+          changed=$(git diff --name-only "$BASE" HEAD)
+          if echo "$changed" | grep '^core/' | grep -qv '^core/tests/' \
+            && ! echo "$changed" | grep -q '^web/src/core/generated/'; then
+            echo "::error::core/ changed but web/src/core/generated/ did not. Run 'npm run build:wasm' in web/ and commit the output."
+            exit 1
+          fi
+
+  core:
+    name: Core (native tests with ASan + UBSan)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: core
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Ninja
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - uses: actions/cache@v4
+        with:
+          path: build/native-asan/_deps
+          key: deps-native-${{ hashFiles('core/cmake/Dependencies.cmake') }}
+      - name: Configure
+        run: cmake --preset native-asan
+      - name: Build
+        run: cmake --build --preset native-asan
+      - name: Test
+        run: ctest --preset native-asan
+
+  web:
+    name: Web (WASM build, types, lint, unit and browser tests)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Ninja, Xvfb and software OpenGL
+        run: sudo apt-get update && sudo apt-get install -y ninja-build xvfb libgl1-mesa-dri
+      # No cache for build/wasm/_deps: its build trees record absolute paths to emsdk, and
+      # setup-emsdk installs to a different place on a cache hit than on a miss.
+      - uses: emscripten-core/setup-emsdk@v16
+        with:
+          version: ${{ env.EMSCRIPTEN_VERSION }}
+          actions-cache-folder: emsdk-cache
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - name: Build the WASM engine from source
+        run: npm run build:wasm
+      - name: Type check and production build (what Vercel runs)
+        run: npm run build
+      - name: Lint
+        run: npm run lint
+      - name: Unit tests
+        run: npm test
+      - name: Install browsers
+        run: npx playwright install --with-deps chromium firefox webkit
+      - name: Browser tests against the production build (Chromium, Firefox, WebKit)
+        # Firefox runs headed on a virtual display: headless Firefox has no WebGL on Linux.
+        run: xvfb-run --auto-servernum npm run test:e2e
+        env:
+          E2E_FIREFOX_HEADED: 1
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: web/test-results
+          retention-days: 7

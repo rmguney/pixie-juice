@@ -1,0 +1,286 @@
+// GIF through giflib. The optimizer re-encodes every frame from its own
+// raster and palette (so pixels, timing, disposal and transparency are
+// identical) and drops comment, plain-text and application extensions other
+// than the loop count (NETSCAPE2.0/ANIMEXTS1.0) and ICC profile, unless
+// metadata is preserved. Conversions quantize with giflib's median cut.
+
+#include "internal.hpp"
+
+#include <gif_lib.h>
+
+#include <algorithm>
+#include <array>
+#include <cstdlib>
+#include <cstring>
+#include <unordered_map>
+
+extern "C" int GifQuantizeBuffer(unsigned int width, unsigned int height, int* color_map_size,
+                                 const GifByteType* red, const GifByteType* green,
+                                 const GifByteType* blue, GifByteType* output, GifColorType* color_map);
+
+namespace pixie::detail {
+
+namespace {
+
+// Total frame pixels a GIF may slurp into memory.
+constexpr std::uint64_t kMaxGifPixels = 512ull * 1024 * 1024;
+
+struct Reader {
+  ByteView data;
+  std::size_t pos = 0;
+};
+
+int read_gif(GifFileType* gif, GifByteType* buffer, int length) {
+  auto* reader = static_cast<Reader*>(gif->UserData);
+  const auto n = std::min<std::size_t>(std::size_t(length), reader->data.size() - reader->pos);
+  std::memcpy(buffer, reader->data.data() + reader->pos, n);
+  reader->pos += n;
+  return int(n);
+}
+
+int write_gif(GifFileType* gif, const GifByteType* buffer, int length) {
+  auto* out = static_cast<Bytes*>(gif->UserData);
+  out->insert(out->end(), buffer, buffer + length);
+  return length;
+}
+
+GifFileType* open_gif(Reader& reader) {
+  int error = 0;
+  GifFileType* gif = DGifOpen(&reader, read_gif, &error);
+  if (!gif) return nullptr;
+  if (DGifSlurp(gif) != GIF_OK) {
+    DGifCloseFile(gif, &error);
+    return nullptr;
+  }
+  std::uint64_t pixels = 0;
+  for (int i = 0; i < gif->ImageCount; ++i) {
+    pixels += std::uint64_t(gif->SavedImages[i].ImageDesc.Width) * gif->SavedImages[i].ImageDesc.Height;
+  }
+  if (gif->ImageCount == 0 || pixels > kMaxGifPixels) {
+    DGifCloseFile(gif, &error);
+    return nullptr;
+  }
+  return gif;
+}
+
+bool is_kept_application(const ExtensionBlock& block) {
+  if (block.ByteCount < 11) return false;
+  const auto* id = reinterpret_cast<const char*>(block.Bytes);
+  return std::memcmp(id, "NETSCAPE2.0", 11) == 0 || std::memcmp(id, "ANIMEXTS1.0", 11) == 0 ||
+         std::memcmp(id, "ICCRGBG1012", 11) == 0;
+}
+
+/// Frees an encoder file that will not be written: EGifCloseFile alone leaks
+/// the frames and extension blocks.
+void discard(GifFileType* gif) {
+  GifFreeSavedImages(gif);
+  GifFreeExtensions(&gif->ExtensionBlockCount, &gif->ExtensionBlocks);
+  int error = 0;
+  EGifCloseFile(gif, &error);
+}
+
+/// Extension blocks worth keeping without preserve_metadata: graphics control
+/// blocks, and the kept application blocks with their continuation sub-blocks.
+void copy_extensions(const SavedImage& from, SavedImage& to, bool keep_all) {
+  bool keep_continuations = false;
+  for (int i = 0; i < from.ExtensionBlockCount; ++i) {
+    const ExtensionBlock& block = from.ExtensionBlocks[i];
+    bool keep = keep_all;
+    if (!keep_all) {
+      if (block.Function == CONTINUE_EXT_FUNC_CODE) {
+        keep = keep_continuations;
+      } else {
+        keep = block.Function == GRAPHICS_EXT_FUNC_CODE ||
+               (block.Function == APPLICATION_EXT_FUNC_CODE && is_kept_application(block));
+        keep_continuations = keep && block.Function == APPLICATION_EXT_FUNC_CODE;
+      }
+    }
+    if (keep) {
+      GifAddExtensionBlock(&to.ExtensionBlockCount, &to.ExtensionBlocks, block.Function, unsigned(block.ByteCount),
+                           block.Bytes);
+    }
+  }
+}
+
+/// Appends a copy of `from` to `target`. (GifMakeSavedImage's own copy drops the
+/// extension block count in giflib 6.1, so frames are copied field by field.)
+bool copy_frame(GifFileType* target, const SavedImage& from, bool keep_all_extensions) {
+  SavedImage* frame = GifMakeSavedImage(target, nullptr);
+  if (!frame) return false;
+  frame->ImageDesc = from.ImageDesc;
+  frame->ImageDesc.ColorMap = nullptr;
+  if (from.ImageDesc.ColorMap) {
+    frame->ImageDesc.ColorMap = GifMakeMapObject(from.ImageDesc.ColorMap->ColorCount, from.ImageDesc.ColorMap->Colors);
+    if (!frame->ImageDesc.ColorMap) return false;
+  }
+  const std::size_t pixels = std::size_t(from.ImageDesc.Width) * std::size_t(from.ImageDesc.Height);
+  frame->RasterBits = static_cast<GifByteType*>(std::malloc(pixels ? pixels : 1));
+  if (!frame->RasterBits) return false;
+  std::memcpy(frame->RasterBits, from.RasterBits, pixels);
+  copy_extensions(from, *frame, keep_all_extensions);
+  return true;
+}
+
+}  // namespace
+
+std::vector<Bytes> gif_candidates(ByteView input, const Options& options) {
+  std::vector<Bytes> candidates;
+  Reader reader{input};
+  GifFileType* source = open_gif(reader);
+  if (!source) return candidates;
+
+  Bytes out;
+  int error = 0;
+  GifFileType* target = EGifOpen(&out, write_gif, &error);
+  if (!target) {
+    DGifCloseFile(source, &error);
+    return candidates;
+  }
+  target->SWidth = source->SWidth;
+  target->SHeight = source->SHeight;
+  target->SColorResolution = source->SColorResolution;
+  target->SBackGroundColor = source->SBackGroundColor;
+  target->AspectByte = source->AspectByte;
+  target->SColorMap = source->SColorMap
+                          ? GifMakeMapObject(source->SColorMap->ColorCount, source->SColorMap->Colors)
+                          : nullptr;
+  bool ok = true;
+  for (int i = 0; i < source->ImageCount && ok; ++i) {
+    ok = copy_frame(target, source->SavedImages[i], options.preserve_metadata);
+  }
+  if (ok && options.preserve_metadata) {
+    for (int i = 0; i < source->ExtensionBlockCount; ++i) {
+      const ExtensionBlock& block = source->ExtensionBlocks[i];
+      GifAddExtensionBlock(&target->ExtensionBlockCount, &target->ExtensionBlocks, block.Function,
+                           unsigned(block.ByteCount), block.Bytes);
+    }
+  }
+  DGifCloseFile(source, &error);
+
+  if (!ok) {
+    discard(target);
+    return candidates;
+  }
+  if (EGifSpew(target, &error) == GIF_OK) candidates.push_back(std::move(out));
+  return candidates;
+}
+
+namespace {
+
+/// Palette indices for `image`: exact when it has at most 256 colours (255
+/// plus a transparent entry), otherwise median-cut over the opaque pixels with
+/// each entry set to the true mean of the pixels mapped to it. Pixels with
+/// alpha below 128 get one extra entry, reported in `clear_index` (-1 if none).
+bool build_palette(const Image& image, std::vector<GifColorType>& palette, Bytes& indices, int& clear_index) {
+  const std::size_t pixels = image.pixel_count();
+  auto is_clear = [&](std::size_t i) { return image.rgba[i * 4 + 3] < 128; };
+  bool any_clear = false;
+  for (std::size_t i = 0; i < pixels && !any_clear; ++i) any_clear = is_clear(i);
+  const std::size_t capacity = any_clear ? 255 : 256;
+  auto rgb = [&](std::size_t i) {
+    return std::uint32_t(image.rgba[i * 4]) << 16 | std::uint32_t(image.rgba[i * 4 + 1]) << 8 | image.rgba[i * 4 + 2];
+  };
+  indices.resize(pixels);
+
+  std::unordered_map<std::uint32_t, std::uint8_t> exact;
+  bool fits = true;
+  for (std::size_t i = 0; i < pixels && fits; ++i) {
+    if (is_clear(i)) continue;
+    const auto [it, inserted] = exact.try_emplace(rgb(i), std::uint8_t(exact.size()));
+    if (inserted && exact.size() > capacity) fits = false;
+    indices[i] = it->second;
+  }
+  if (fits) {
+    palette.assign(exact.size(), GifColorType{});
+    for (const auto& [colour, index] : exact) {
+      palette[index] = GifColorType{std::uint8_t(colour >> 16), std::uint8_t(colour >> 8), std::uint8_t(colour)};
+    }
+  } else {
+    Bytes red, green, blue;
+    std::vector<std::size_t> opaque;
+    for (std::size_t i = 0; i < pixels; ++i) {
+      if (is_clear(i)) continue;
+      opaque.push_back(i);
+      red.push_back(image.rgba[i * 4]);
+      green.push_back(image.rgba[i * 4 + 1]);
+      blue.push_back(image.rgba[i * 4 + 2]);
+    }
+    int colors = int(capacity);
+    GifColorType quantized[256] = {};
+    Bytes mapped(opaque.size());
+    if (GifQuantizeBuffer(unsigned(opaque.size()), 1, &colors, red.data(), green.data(), blue.data(), mapped.data(),
+                          quantized) != GIF_OK) {
+      return false;
+    }
+    // giflib's median cut works on 5-bit channels; refine each entry to the 8-bit mean.
+    std::vector<std::array<std::uint64_t, 4>> sums(static_cast<std::size_t>(colors));
+    for (std::size_t k = 0; k < opaque.size(); ++k) {
+      auto& sum = sums[mapped[k]];
+      sum[0] += red[k];
+      sum[1] += green[k];
+      sum[2] += blue[k];
+      ++sum[3];
+      indices[opaque[k]] = mapped[k];
+    }
+    palette.resize(std::size_t(colors));
+    for (std::size_t c = 0; c < palette.size(); ++c) {
+      const auto n = sums[c][3];
+      palette[c] = n ? GifColorType{std::uint8_t((sums[c][0] + n / 2) / n), std::uint8_t((sums[c][1] + n / 2) / n),
+                                    std::uint8_t((sums[c][2] + n / 2) / n)}
+                     : quantized[c];
+    }
+  }
+  clear_index = -1;
+  if (any_clear) {
+    clear_index = int(palette.size());
+    palette.push_back(GifColorType{0, 0, 0});
+    for (std::size_t i = 0; i < pixels; ++i) {
+      if (is_clear(i)) indices[i] = std::uint8_t(clear_index);
+    }
+  }
+  // GIF colour tables hold a power of two entries, at least 2.
+  std::size_t size = 2;
+  while (size < palette.size()) size *= 2;
+  palette.resize(size, GifColorType{0, 0, 0});
+  return true;
+}
+
+}  // namespace
+
+Result<Bytes> encode_gif(const Image& image) {
+  if (image.width > 0xFFFF || image.height > 0xFFFF) return fail("GIF dimensions exceed 65535");
+  std::vector<GifColorType> palette;
+  Bytes indices;
+  int clear_index = -1;
+  if (!build_palette(image, palette, indices, clear_index)) return fail("GIF quantization failed");
+
+  Bytes out;
+  int error = 0;
+  GifFileType* gif = EGifOpen(&out, write_gif, &error);
+  if (!gif) return fail("GIF encoder init failed");
+  gif->SWidth = int(image.width);
+  gif->SHeight = int(image.height);
+  gif->SColorResolution = 8;
+  gif->SBackGroundColor = 0;
+  gif->SColorMap = GifMakeMapObject(int(palette.size()), palette.data());
+  SavedImage* frame = GifMakeSavedImage(gif, nullptr);
+  if (!gif->SColorMap || !frame) {
+    discard(gif);
+    return fail("GIF encoder out of memory");
+  }
+  frame->ImageDesc = GifImageDesc{0, 0, int(image.width), int(image.height), false, nullptr};
+  frame->RasterBits = static_cast<GifByteType*>(std::malloc(indices.size()));
+  if (!frame->RasterBits) {
+    discard(gif);
+    return fail("GIF encoder out of memory");
+  }
+  std::memcpy(frame->RasterBits, indices.data(), indices.size());
+  if (clear_index >= 0) {
+    GraphicsControlBlock control{DISPOSAL_UNSPECIFIED, false, 0, clear_index};
+    EGifGCBToSavedExtension(&control, gif, 0);
+  }
+  if (EGifSpew(gif, &error) != GIF_OK) return fail("GIF encode failed");
+  return out;
+}
+
+}  // namespace pixie::detail

@@ -1,0 +1,9 @@
+{
+  "name": "pixie-juice-root",
+  "private": true,
+  "scripts": {
+    "build": "cd web && npm run build",
+    "dev": "cd web && npm run dev",
+    "preview": "cd web && npm run preview"
+  }
+}
