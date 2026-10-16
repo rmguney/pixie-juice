@@ -51,6 +51,8 @@ Result<Image> decode_tiff(ByteView data);
 Result<Image> decode_gif(ByteView data);
 /// Inflating the PNG's image data and compressed chunks stays within what its header allows.
 bool png_within_limits(ByteView data);
+/// A PNG lodepng may decode: a valid header, within kMaxPixels and png_within_limits.
+bool png_decodable(ByteView data);
 /// A TIFF libtiff opens but can't decode here (a codec not built in, floating-point samples):
 /// optimizing passes it through.
 bool tiff_passes_through(ByteView data);

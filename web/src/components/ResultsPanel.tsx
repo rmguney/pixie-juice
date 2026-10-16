@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react';
 import type { ResultsPanelProps, ProcessedResult } from '../types';
 import { outputNames } from '../utils/files';
 import { formatBytes, formatChange } from '../utils/format';
@@ -31,13 +32,20 @@ export default function ResultsPanel({ results, onReset }: ResultsPanelProps) {
   const downloadAll = () =>
     successful.forEach((result, index) => setTimeout(() => download(result, names.get(result)!), index * 100));
 
+  // The panel replaces the one that had focus: move it here, so keyboard and
+  // screen reader users land on the results.
+  const heading = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    if (!document.activeElement || document.activeElement === document.body) heading.current?.focus();
+  }, []);
+
   const before = successful.reduce((sum, r) => sum + r.file.size, 0);
   const after = successful.reduce((sum, r) => sum + r.data.length, 0);
 
   return (
     <section className="card panel" aria-labelledby="panel-title">
       <div className="card-head">
-        <h2 className="card-title" id="panel-title">
+        <h2 className="card-title" id="panel-title" ref={heading} tabIndex={-1}>
           Results
         </h2>
       </div>

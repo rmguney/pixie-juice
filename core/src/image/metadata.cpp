@@ -6,7 +6,6 @@
 
 #include <lcms2.h>
 #include <lodepng.h>
-#include <tiffio.h>
 #include <webp/mux.h>
 
 #include <algorithm>

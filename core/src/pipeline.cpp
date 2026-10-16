@@ -61,21 +61,19 @@ Result<Output> optimize_image(ByteView input, Format format, const Options& opti
   const ColourInfo colour = read_colour_info(input, format);
 
   const double budget = allowed_error(options);
-  Output best = unchanged(format);
-  std::size_t best_size = input.size();
-  for (auto& candidate : image_candidates(input, format, *image, options)) {
-    if (candidate.size() >= best_size) continue;
+  auto candidates = image_candidates(input, format, *image, options);
+  // Smallest first: the first one that passes verification is the result.
+  std::stable_sort(candidates.begin(), candidates.end(), [](const Bytes& a, const Bytes& b) { return a.size() < b.size(); });
+  for (auto& candidate : candidates) {
+    if (candidate.size() >= input.size()) break;
     const Format candidate_format = detect(candidate);
     // Pixels are compared in stored orientation and colour, so what displays
     // them (orientation, colour profile) must survive too.
     const ColourInfo kept = read_colour_info(candidate, candidate_format);
     if (kept.orientation != colour.orientation || kept.icc.empty() != colour.icc.empty()) continue;
-    if (is_faithful(reference, candidate, candidate_format, budget)) {
-      best_size = candidate.size();
-      best = Output{std::move(candidate), candidate_format, true};
-    }
+    if (is_faithful(reference, candidate, candidate_format, budget)) return Output{std::move(candidate), candidate_format, true};
   }
-  return best;
+  return unchanged(format);
 }
 
 Result<ReadMesh> read_mesh(ByteView input, Format format, MeshUse use, StlInfo* stl = nullptr,
@@ -139,6 +137,8 @@ Result<Output> optimize_mesh_file(ByteView input, Format format, const Options& 
   const auto source = read_mesh(input, format, MeshUse::Optimize, &stl, &ply);
   if (!source) return std::unexpected(source.error());
   if (!source->exact) return unchanged(format);
+  // Binary STL is 50 bytes per triangle: without simplification nothing can get smaller.
+  if (format == Format::Stl && stl.binary && options.mesh_ratio >= 1.0f) return unchanged(format);
 
   const Mesh optimized = optimize_mesh(source->mesh, options.mesh_ratio);
   Bytes out = format == Format::Obj   ? write_obj(optimized, obj_header(input))

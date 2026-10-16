@@ -17,7 +17,7 @@
   --border-strong: #3a3a41;
   --text: #f4f4f5;
   --muted: #a1a1aa;
-  --faint: #71717a;
+  --faint: #8b8b94;
   --focus: #c4b5fd;
   --good: #4ade80;
   --bad: #f87171;
@@ -38,9 +38,9 @@
     --border-strong: #d4d4d8;
     --text: #09090b;
     --muted: #52525b;
-    --faint: #71717a;
+    --faint: #6b6b74;
     --focus: #7c3aed;
-    --good: #15803d;
+    --good: #166534;
     --bad: #dc2626;
     --check: #f1f1f3;
     --shadow: 0 1px 2px rgb(0 0 0 / 0.08);
@@ -190,12 +190,6 @@ a {
   50% {
     opacity: 0.35;
     transform: scale(0.92);
-  }
-}
-
-@media (max-width: 480px) {
-  .topbar .chip:not([data-testid]) {
-    display: none;
   }
 }
 
@@ -680,7 +674,7 @@ a {
   transition: color 0.15s, background-color 0.15s;
 }
 
-.segmented button[aria-selected='true'] {
+.segmented button[aria-pressed='true'] {
   background: var(--surface);
   color: var(--text);
   box-shadow: var(--shadow);

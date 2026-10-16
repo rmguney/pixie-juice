@@ -91,8 +91,11 @@ Result<Image> decode_dib(ByteView dib) {
   auto image = decode_rgba(bmp, Format::Bmp);
   if (!image) return image;
 
-  // Below 32 bpp, transparency comes from the AND mask (bottom-up rows).
-  if (bpp < 32 && mask_offset + mask_stride * std::uint64_t(height) <= dib.size()) {
+  // Below 32 bpp, transparency comes from the AND mask (bottom-up rows). So it
+  // does at 32 bpp when the alpha channel is all zero (stb then makes it opaque).
+  bool alpha_unused = bpp == 32;
+  for (std::uint64_t at = xor_offset + 3; alpha_unused && at < mask_offset; at += 4) alpha_unused = dib[at] == 0;
+  if ((bpp < 32 || alpha_unused) && mask_offset + mask_stride * std::uint64_t(height) <= dib.size()) {
     for (std::int32_t y = 0; y < height; ++y) {
       const auto* row = dib.data() + mask_offset + mask_stride * std::uint64_t(height - 1 - y);
       for (std::int32_t x = 0; x < width; ++x) {
@@ -132,6 +135,8 @@ std::vector<Bytes> ico_candidates(ByteView input, const Options& options) {
     const auto original = payload(input, e);
     Bytes best(original.begin(), original.end());
     if (is_png(original)) {
+      // Only the largest entry is decoded (and limit-checked) as the reference; zopflipng decodes them all.
+      if (!png_decodable(original)) return {};
       for (auto& c : png_candidates(original, options)) {
         if (c.size() < best.size()) best = std::move(c);
       }

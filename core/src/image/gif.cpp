@@ -198,15 +198,47 @@ bool same_frames(GifFileType* a, GifFileType* b) {
 }  // namespace
 
 Result<Image> decode_gif(ByteView data) {
+  if (!frames_within_limits(data)) return fail("Not a valid GIF");
   Reader reader{data};
-  GifFileType* gif = open_gif(reader);
+  int error = 0;
+  GifFileType* gif = DGifOpen(&reader, read_gif, &error);
   if (!gif) return fail("Not a valid GIF");
-  const SavedImage& frame = gif->SavedImages[0];
-  const GifImageDesc& desc = frame.ImageDesc;
-  const ColorMapObject* map = desc.ColorMap ? desc.ColorMap : gif->SColorMap;
+  // Only the first frame is read: the records up to its image, then its raster.
   GraphicsControlBlock control{};
   control.TransparentColor = NO_TRANSPARENT_COLOR;
-  DGifSavedExtensionToGCB(gif, 0, &control);
+  std::vector<GifPixelType> raster;
+  bool ok = true, found = false;
+  while (ok && !found) {
+    GifRecordType type = UNDEFINED_RECORD_TYPE;
+    ok = DGifGetRecordType(gif, &type) == GIF_OK && type != TERMINATE_RECORD_TYPE;
+    if (ok && type == EXTENSION_RECORD_TYPE) {
+      int code = 0;
+      GifByteType* block = nullptr;
+      ok = DGifGetExtension(gif, &code, &block) == GIF_OK;
+      if (ok && code == GRAPHICS_EXT_FUNC_CODE && block) DGifExtensionToGCB(block[0], block + 1, &control);
+      while (ok && block) ok = DGifGetExtensionNext(gif, &block) == GIF_OK;
+    } else if (ok && type == IMAGE_DESC_RECORD_TYPE) {
+      ok = DGifGetImageDesc(gif) == GIF_OK;
+      if (!ok) break;
+      const GifImageDesc& d = gif->Image;
+      raster.resize(std::size_t(d.Width) * std::size_t(d.Height));
+      // Interlaced rows arrive in four passes.
+      static constexpr int offsets[] = {0, 4, 2, 1}, steps[] = {8, 8, 4, 2};
+      for (int pass = 0; pass < (d.Interlace ? 4 : 1) && ok; ++pass) {
+        const int first = d.Interlace ? offsets[pass] : 0, step = d.Interlace ? steps[pass] : 1;
+        for (int y = first; y < d.Height && ok; y += step) {
+          ok = DGifGetLine(gif, raster.data() + std::size_t(y) * std::size_t(d.Width), d.Width) == GIF_OK;
+        }
+      }
+      found = ok;
+    }
+  }
+  if (!found) {
+    DGifCloseFile(gif, &error);
+    return fail("Not a valid GIF");
+  }
+  const GifImageDesc& desc = gif->Image;
+  const ColorMapObject* map = desc.ColorMap ? desc.ColorMap : gif->SColorMap;
 
   Image image;
   // A zero screen size means the first frame's extent.
@@ -220,7 +252,7 @@ Result<Image> decode_gif(ByteView data) {
     for (int y = 0; y < desc.Height; ++y) {
       for (int x = 0; x < desc.Width; ++x) {
         const std::uint32_t cx = std::uint32_t(desc.Left + x), cy = std::uint32_t(desc.Top + y);
-        const int index = frame.RasterBits[std::size_t(y) * desc.Width + x];
+        const int index = raster[std::size_t(y) * desc.Width + x];
         if (cx >= image.width || cy >= image.height || index == control.TransparentColor || !map ||
             index >= map->ColorCount) {
           continue;
@@ -234,7 +266,6 @@ Result<Image> decode_gif(ByteView data) {
     }
     result = std::move(image);
   }
-  int error = 0;
   DGifCloseFile(gif, &error);
   return result;
 }

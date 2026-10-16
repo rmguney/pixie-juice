@@ -9,6 +9,8 @@ import {
   Group,
   HemisphereLight,
   type LineBasicMaterial,
+  type Mesh,
+  type MeshStandardMaterial,
   PerspectiveCamera,
   Scene,
   Vector3,
@@ -47,14 +49,14 @@ export default function MeshPreview({ file, type }: { file: File; type: MeshForm
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     host.appendChild(renderer.domElement);
 
-    const style = getComputedStyle(host);
     const scene = new Scene();
     scene.add(new HemisphereLight(0xffffff, 0x50505a, 2.2));
     const sun = new DirectionalLight(0xffffff, 2.2);
     sun.position.set(3, 5, 4);
     scene.add(sun);
-    const gridColor = style.getPropertyValue('--grid').trim();
-    const grid = new GridHelper(6, 24, gridColor, gridColor);
+    const token = (name: string) => getComputedStyle(host).getPropertyValue(name).trim();
+    const makeGrid = () => new GridHelper(6, 24, token('--grid'), token('--grid'));
+    let grid = makeGrid();
     scene.add(grid);
 
     const camera = new PerspectiveCamera(38, 1, 0.01, 200);
@@ -86,9 +88,31 @@ export default function MeshPreview({ file, type }: { file: File; type: MeshForm
     observer.observe(host);
     resize();
 
-    view.current = { scene, camera, controls, grid, surface: style.getPropertyValue('--mesh').trim(), redraw };
+    view.current = { scene, camera, controls, grid, surface: token('--mesh'), redraw };
+
+    // The grid and the default mesh colour come from the theme: follow a change of colour scheme.
+    const scheme = matchMedia('(prefers-color-scheme: dark)');
+    const restyle = () => {
+      const current = view.current;
+      if (!current) return;
+      const next = makeGrid();
+      next.position.copy(grid.position);
+      scene.remove(grid);
+      grid.geometry.dispose();
+      (grid.material as LineBasicMaterial).dispose();
+      scene.add(next);
+      grid = current.grid = next;
+      current.surface = token('--mesh');
+      scene.traverse((node) => {
+        if (node.userData.surface) ((node as Mesh).material as MeshStandardMaterial).color.set(current.surface);
+      });
+      redraw();
+    };
+    scheme.addEventListener('change', restyle);
+
     return () => {
       view.current = null;
+      scheme.removeEventListener('change', restyle);
       cancelAnimationFrame(frame);
       observer.disconnect();
       controls.dispose();
@@ -109,7 +133,7 @@ export default function MeshPreview({ file, type }: { file: File; type: MeshForm
     const group = new Group();
     file
       .arrayBuffer()
-      .then((buffer) => loadModel(new Uint8Array(buffer), type, current.surface))
+      .then((buffer) => loadModel(buffer, type, current.surface))
       .then(({ object, box }) => {
         if (cancelled) {
           disposeModel(object);

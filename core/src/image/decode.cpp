@@ -10,7 +10,6 @@
 #include <webp/demux.h>
 
 #include <algorithm>
-#include <cstring>
 
 namespace pixie::detail {
 

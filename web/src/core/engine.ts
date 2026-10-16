@@ -83,6 +83,41 @@ async function optimizeSvgFile(data: Uint8Array, options: CoreOptions): Promise<
     : { data, format: 'svg', changed: false };
 }
 
+/** Area-weighted vertex normals, as three.js's computeVertexNormals. */
+function smoothNormals(positions: Float32Array, indices: Uint32Array): Float32Array {
+  const normals = new Float32Array(positions.length);
+  for (let t = 0; t < indices.length; t += 3) {
+    const a = indices[t] * 3, b = indices[t + 1] * 3, c = indices[t + 2] * 3;
+    const ux = positions[b] - positions[a], uy = positions[b + 1] - positions[a + 1], uz = positions[b + 2] - positions[a + 2];
+    const vx = positions[c] - positions[a], vy = positions[c + 1] - positions[a + 1], vz = positions[c + 2] - positions[a + 2];
+    const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+    normals[a] += nx;
+    normals[a + 1] += ny;
+    normals[a + 2] += nz;
+    normals[b] += nx;
+    normals[b + 1] += ny;
+    normals[b + 2] += nz;
+    normals[c] += nx;
+    normals[c + 1] += ny;
+    normals[c + 2] += nz;
+  }
+  for (let i = 0; i < normals.length; i += 3) {
+    const length = Math.hypot(normals[i], normals[i + 1], normals[i + 2]) || 1;
+    normals[i] /= length;
+    normals[i + 1] /= length;
+    normals[i + 2] /= length;
+  }
+  return normals;
+}
+
+/** sRGB colours to linear light, which three.js shades in. */
+function linearize(colors: Float32Array) {
+  for (let i = 0; i < colors.length; i++) {
+    const c = colors[i];
+    colors[i] = c < 0.04045 ? c * 0.0773993808 : Math.pow(c * 0.9478672986 + 0.0521327014, 2.4);
+  }
+}
+
 export class Engine {
   private constructor(private readonly native: MainModule) {}
 
@@ -127,9 +162,11 @@ export class Engine {
     };
   }
 
+  /** Done here rather than on the page: normals and colours of a large mesh take a while. */
   decodeMesh(data: Uint8Array): DecodedMesh {
     const { positions, normals, colors, indices, error } = this.native.decodeMesh(data) as NativeMesh;
     if (error !== undefined || !positions || !indices) throw new EngineError(error ?? 'Decode failed');
-    return { positions, normals, colors, indices };
+    if (colors) linearize(colors);
+    return { positions, normals: normals ?? smoothNormals(positions, indices), colors, indices };
   }
 }

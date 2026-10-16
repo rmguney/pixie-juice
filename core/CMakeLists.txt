@@ -11,32 +11,31 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 option(PIXIE_BUILD_TESTS "Build the native unit tests" ON)
 option(PIXIE_SANITIZE "Build with AddressSanitizer (and UBSan where available)" OFF)
 
+# Sanitizer builds instrument every library too, and any report stops the program.
 if(PIXIE_SANITIZE)
   if(MSVC)
     add_compile_options(/fsanitize=address /Zi)
   else()
-    add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+    add_compile_options(-fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer)
     add_link_options(-fsanitize=address,undefined)
   endif()
 endif()
 
 # Settings for Pixie Juice's own code; the bundled libraries build with their
 # defaults. Warnings are errors; native builds get stack protection, fortified
-# libc calls (optimised builds) and libstdc++ bounds assertions; UBSan stops at
-# the first report in pixie code, while third-party code only logs.
+# libc calls (optimised builds) and libstdc++ bounds assertions.
 function(pixie_project_options target)
+  if(WIN32)
+    target_compile_definitions(${target} PRIVATE _CRT_SECURE_NO_WARNINGS)  # fopen is portable C
+  endif()
   if(MSVC)
     target_compile_options(${target} PRIVATE /W4 /WX /permissive- /utf-8)
-    target_compile_definitions(${target} PRIVATE _CRT_SECURE_NO_WARNINGS)  # fopen is portable C
   else()
     target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic -Werror)
     if(NOT EMSCRIPTEN)
       target_compile_options(${target} PRIVATE -fstack-protector-strong
                              "$<$<NOT:$<CONFIG:Debug>>:-U_FORTIFY_SOURCE;-D_FORTIFY_SOURCE=3>")
       target_compile_definitions(${target} PRIVATE _GLIBCXX_ASSERTIONS)
-    endif()
-    if(PIXIE_SANITIZE)
-      target_compile_options(${target} PRIVATE -fno-sanitize-recover=undefined)
     endif()
   endif()
 endfunction()
@@ -64,14 +63,10 @@ add_library(pixie_core STATIC
 )
 target_include_directories(pixie_core
   PUBLIC include
-  PRIVATE src ${CMAKE_CURRENT_BINARY_DIR}/generated)
+  PRIVATE src)
 target_link_libraries(pixie_core PRIVATE
   pixie_jpeg pixie_png pixie_webp pixie_gif pixie_tiff pixie_lcms pixie_mesh_deps pixie_stb ZLIB::ZLIB)
 pixie_project_options(pixie_core)
-# stb's implementations are compiled here but are third-party code: their UBSan reports stay non-fatal.
-if(PIXIE_SANITIZE AND NOT MSVC)
-  set_source_files_properties(src/third_party_impl.cpp PROPERTIES COMPILE_OPTIONS -fsanitize-recover=undefined)
-endif()
 
 if(EMSCRIPTEN)
   add_executable(pixie_wasm src/bindings/embind.cpp)
@@ -145,7 +140,7 @@ if(PIXIE_BUILD_TESTS AND NOT EMSCRIPTEN)
   find_package(Threads REQUIRED)
   target_link_libraries(pixie_tests PRIVATE
     pixie_core pixie_stb pixie_png pixie_jpeg pixie_webp pixie_gif pixie_tiff pixie_lcms pixie_mesh_deps doctest_header
-    Threads::Threads)
+    ZLIB::ZLIB Threads::Threads)
   target_include_directories(pixie_tests PRIVATE src ${CMAKE_CURRENT_BINARY_DIR}/generated)
   add_dependencies(pixie_tests pixie_build_info)
   add_test(NAME pixie_tests COMMAND pixie_tests)

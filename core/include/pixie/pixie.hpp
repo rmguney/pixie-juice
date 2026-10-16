@@ -61,8 +61,9 @@ struct Output {
 
 /// Optimizes within the input's own format. Every candidate must be smaller
 /// and pass verification (decodes, same size, alpha and colour kept, pixel
-/// error within the quality budget; meshes keep their exact triangles unless
-/// simplification was asked for); otherwise the input is the result.
+/// error within the quality budget; OBJ, STL and PLY keep their exact triangles
+/// unless simplification was asked for, while glTF output from gltfpack is
+/// accepted on size); otherwise the input is the result.
 [[nodiscard]] Result<Output> optimize(ByteView input, const Options& options);
 
 /// Converts a decodable image to `target`: Png, Jpeg, WebP, Gif, Bmp, Tga, Ico or Tiff.

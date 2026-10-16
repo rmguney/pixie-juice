@@ -22,6 +22,12 @@
 #include <random>
 #include <unordered_map>
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>  // GetShortPathNameW
+#endif
+
 namespace pixie::detail {
 
 namespace {
@@ -149,6 +155,28 @@ std::pair<std::string_view, std::string_view> split_keyword(std::string_view lin
   return {line.substr(0, end), trim(line.substr(end))};
 }
 
+/// Every value is a finite number fast_obj reads back as written: it reads an
+/// exponent of 20 or more (either sign) as 0, and "inf" or "nan" as 0.
+bool exact_numbers(std::string_view values) {
+  for (auto remaining = values; !remaining.empty();) {
+    const auto end = std::min(remaining.find_first_of(" \t"), remaining.size());
+    auto token = remaining.substr(0, end);
+    remaining = trim(remaining.substr(end));
+    if (token.starts_with('+')) token.remove_prefix(1);
+    double value = 0;
+    const auto parsed = std::from_chars(token.data(), token.data() + token.size(), value);
+    if (parsed.ec != std::errc() || parsed.ptr != token.data() + token.size() || !std::isfinite(value)) return false;
+    if (const auto e = token.find_first_of("eE"); e != std::string_view::npos) {
+      auto digits = token.substr(e + 1);
+      if (digits.starts_with('+')) digits.remove_prefix(1);
+      int exponent = 0;
+      std::from_chars(digits.data(), digits.data() + digits.size(), exponent);
+      if (exponent >= 20 || exponent <= -20) return false;
+    }
+  }
+  return true;
+}
+
 ObjScan scan_obj(std::string_view text) {
   // Statements the writer doesn't reproduce: free-form geometry, points, lines, display attributes.
   static constexpr std::array<std::string_view, 29> kUnsupported{
@@ -170,6 +198,7 @@ ObjScan scan_obj(std::string_view text) {
     if (keyword == "s" && rest != "off" && rest != "0") smoothing = true;
     if (keyword == "usemtl") material_seen = true;
     if (keyword == "f" && !material_seen) ++scan.faces_without_material;
+    if ((keyword == "v" || keyword == "vt" || keyword == "vn") && !exact_numbers(rest)) scan.exact = false;
     if (keyword == "v") {
       // xyz, or xyz plus RGB; a "w" weight or anything else isn't reproduced.
       int values = 0;
@@ -276,13 +305,38 @@ bool all_finite(std::span<const float> values) {
 // ---------------------------------------------------------------------------
 // Temporary files
 
+namespace {
+
+/// The temp directory as a path fopen (and the libraries given it) can open.
+std::filesystem::path temp_directory() {
+  std::error_code ec;
+  auto dir = std::filesystem::temp_directory_path(ec);
+  if (ec) return ".";
+#ifdef _WIN32
+  // Narrow paths are in the ANSI code page, which may not hold the user's name
+  // (path::string() throws then); the short 8.3 form of the path is plain ASCII.
+  try {
+    (void)dir.string();
+    return dir;
+  } catch (const std::exception&) {
+  }
+  std::wstring shortened(MAX_PATH, L'\0');
+  const DWORD length = GetShortPathNameW(dir.c_str(), shortened.data(), DWORD(shortened.size()));
+  if (length == 0 || length >= shortened.size()) return ".";
+  shortened.resize(length);
+  return shortened;
+#else
+  return dir;
+#endif
+}
+
+}  // namespace
+
 TempFile::TempFile(std::string_view extension) {
   // A random name, created exclusively: concurrent calls and processes never
   // share a file, and nothing else can claim the name first. On failure the
   // path stays empty and every use of it fails.
-  std::error_code ec;
-  auto dir = std::filesystem::temp_directory_path(ec);
-  if (ec) dir = ".";
+  const auto dir = temp_directory();
   std::random_device entropy;
   for (int attempt = 0; attempt < 8 && path_.empty(); ++attempt) {
     const std::uint64_t id = std::uint64_t(entropy()) << 32 | entropy();
@@ -324,7 +378,8 @@ std::string obj_header(ByteView source) {
   std::string header = "# Optimized by Pixie Juice\n";
   for_each_line(as_text(source), [&](std::string_view raw) {
     const auto line = trim(raw);
-    if (line.starts_with("mtllib ") || line.starts_with("o ") || line.starts_with("g ")) {
+    const auto keyword = split_keyword(line).first;
+    if (keyword == "mtllib" || keyword == "o" || keyword == "g") {
       header.append(line);
       header.push_back('\n');
     }

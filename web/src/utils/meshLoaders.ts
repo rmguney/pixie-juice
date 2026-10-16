@@ -1,12 +1,13 @@
-// Models for the 3D preview. OBJ, STL and PLY are read by the engine in its
-// worker, so large files never block the page; glTF/GLB (materials, textures,
-// scene graph) and FBX use three.js's loaders, each fetched only when needed.
+// Models for the 3D preview, all read off the main thread so large files never
+// block the page: OBJ, STL and PLY by the engine in its worker (normals and
+// colours included); glTF/GLB (materials, textures, scene graph) and FBX by
+// three.js's loaders in the model worker, which starts on first use and stops
+// when idle.
 
 import {
   Box3,
   BufferAttribute,
   BufferGeometry,
-  Color,
   DoubleSide,
   Line,
   type Material,
@@ -14,70 +15,91 @@ import {
   MeshStandardMaterial,
   type Object3D,
   Points,
-  SRGBColorSpace,
   Texture,
 } from 'three';
 import { getPixie } from '../core/client';
 import type { DecodedMesh, MeshFormat } from '../core/types';
+import type { ModelRequest, ModelResponse } from './modelProtocol';
+import { deserializeScene } from './sceneTransfer';
 
 interface LoadedModel {
   object: Object3D;
   box: Box3;
 }
 
-function surface(geometry: BufferGeometry, color: string): Mesh {
-  if (!geometry.attributes.normal) geometry.computeVertexNormals();
-  const vertexColors = Boolean(geometry.attributes.color);
+function surface({ positions, normals, colors, indices }: DecodedMesh, color: string): Mesh {
+  const geometry = new BufferGeometry();
+  geometry.setAttribute('position', new BufferAttribute(positions, 3));
+  geometry.setAttribute('normal', new BufferAttribute(normals, 3));
+  if (colors) geometry.setAttribute('color', new BufferAttribute(colors, 3));
+  geometry.setIndex(new BufferAttribute(indices, 1));
   const material = new MeshStandardMaterial({
     // Vertex colours are multiplied by the material colour, so it stays white for them.
-    color: vertexColors ? '#ffffff' : color,
+    color: colors ? '#ffffff' : color,
     metalness: 0.05,
     roughness: 0.55,
     side: DoubleSide,
-    vertexColors,
+    vertexColors: Boolean(colors),
   });
-  return new Mesh(geometry, material);
+  const mesh = new Mesh(geometry, material);
+  mesh.userData.surface = !colors; // drawn in the theme's colour, which follows the colour scheme
+  return mesh;
 }
 
-function geometryOf({ positions, normals, colors, indices }: DecodedMesh): BufferGeometry {
-  const geometry = new BufferGeometry();
-  geometry.setAttribute('position', new BufferAttribute(positions, 3));
-  if (normals) geometry.setAttribute('normal', new BufferAttribute(normals, 3));
-  if (colors) {
-    // Files store sRGB; three.js shades in linear light.
-    const color = new Color();
-    for (let i = 0; i < colors.length; i += 3) {
-      color.setRGB(colors[i], colors[i + 1], colors[i + 2], SRGBColorSpace).toArray(colors, i);
-    }
-    geometry.setAttribute('color', new BufferAttribute(colors, 3));
+/** The model worker stops after this long without work; Draco's and meshopt's memory goes with it. */
+const MODEL_IDLE_MS = 30_000;
+
+let modelWorker: Worker | null = null;
+let modelIdle: ReturnType<typeof setTimeout> | undefined;
+const pendingModels = new Map<number, { resolve: (object: Object3D) => void; reject: (error: Error) => void }>();
+let nextModel = 0;
+
+function modelSettled() {
+  if (pendingModels.size > 0) return;
+  modelIdle = setTimeout(() => {
+    modelWorker?.terminate();
+    modelWorker = null;
+  }, MODEL_IDLE_MS);
+}
+
+/** Parses a glTF, GLB or FBX in the model worker; the buffer moves to it. */
+function parseInWorker(buffer: ArrayBuffer, type: ModelRequest['type']): Promise<Object3D> {
+  clearTimeout(modelIdle);
+  if (!modelWorker) {
+    const worker = new Worker(new URL('./modelWorker.ts', import.meta.url), { type: 'module' });
+    worker.onmessage = ({ data: response }: MessageEvent<ModelResponse>) => {
+      const pending = pendingModels.get(response.id);
+      pendingModels.delete(response.id);
+      if ('error' in response) pending?.reject(new Error(response.error));
+      else pending?.resolve(deserializeScene(response.scene));
+      modelSettled();
+    };
+    worker.onerror = (event) => {
+      // Fail what was asked; the next model gets a new worker.
+      for (const { reject } of pendingModels.values()) reject(new Error(event.message || 'The model worker failed'));
+      pendingModels.clear();
+      worker.terminate();
+      modelWorker = null;
+    };
+    modelWorker = worker;
   }
-  geometry.setIndex(new BufferAttribute(indices, 1));
-  return geometry;
+  const id = nextModel++;
+  return new Promise((resolve, reject) => {
+    pendingModels.set(id, { resolve, reject });
+    modelWorker!.postMessage({ id, type, data: buffer } satisfies ModelRequest, [buffer]);
+  });
 }
 
-/** The bytes as an ArrayBuffer, copied only when the view doesn't cover a whole one. */
-function arrayBuffer(data: Uint8Array): ArrayBuffer {
-  const { buffer } = data;
-  return buffer instanceof ArrayBuffer && data.byteOffset === 0 && data.byteLength === buffer.byteLength
-    ? buffer
-    : data.slice().buffer;
-}
-
-async function parse(data: Uint8Array, type: MeshFormat, color: string): Promise<Object3D> {
+async function parse(buffer: ArrayBuffer, type: MeshFormat, color: string): Promise<Object3D> {
   switch (type) {
     case 'obj':
     case 'stl':
     case 'ply':
-      return surface(geometryOf(await getPixie().decodeMesh(data)), color);
+      return surface(await getPixie().decodeMesh(new Uint8Array(buffer), true), color);
     case 'gltf':
-    case 'glb': {
-      const { parseGltf } = await import('./gltf');
-      return parseGltf(arrayBuffer(data));
-    }
-    case 'fbx': {
-      const { FBXLoader } = await import('three/addons/loaders/FBXLoader.js');
-      return new FBXLoader().parse(arrayBuffer(data), '');
-    }
+    case 'glb':
+    case 'fbx':
+      return parseInWorker(buffer, type);
   }
 }
 
@@ -88,16 +110,21 @@ export function disposeModel(object: Object3D) {
     node.geometry.dispose();
     for (const material of [node.material as Material | Material[]].flat()) {
       for (const value of Object.values(material)) {
-        if (value instanceof Texture) value.dispose();
+        if (!(value instanceof Texture)) continue;
+        value.dispose();
+        if (typeof ImageBitmap !== 'undefined' && value.image instanceof ImageBitmap) value.image.close();
       }
       material.dispose();
     }
   });
 }
 
-/** Loads a model and measures it for framing; `color` is for meshes without materials of their own. */
-export async function loadModel(data: Uint8Array, type: MeshFormat, color: string): Promise<LoadedModel> {
-  const object = await parse(data, type, color);
+/**
+ * Loads a model and measures it for framing; `color` is for meshes without
+ * materials of their own. The buffer moves to a worker: don't use it afterwards.
+ */
+export async function loadModel(buffer: ArrayBuffer, type: MeshFormat, color: string): Promise<LoadedModel> {
+  const object = await parse(buffer, type, color);
   const box = new Box3().setFromObject(object);
   if (box.isEmpty()) {
     disposeModel(object);

@@ -43,6 +43,37 @@ test('large PNG with transparency keeps format and exact alpha', async ({ page }
   expect(r.meanError).toBe(0);
 });
 
+test('decodes a large PNG saved by the browser itself', async ({ page }) => {
+  // Chromium's PNG encoder writes deflate streams that lodepng 20191107 (bundled with zopfli) decoded wrongly.
+  // Zopfli on a megabyte of noise takes ~25 s in Firefox's WebAssembly alone, past the limit under a full parallel run.
+  test.slow();
+  const r = await page.evaluate(async () => {
+    const canvas = Object.assign(document.createElement('canvas'), { width: 1200, height: 800 });
+    const context = canvas.getContext('2d')!;
+    const gradient = context.createLinearGradient(0, 0, 1200, 800);
+    gradient.addColorStop(0, 'hsl(240, 80%, 60%)');
+    gradient.addColorStop(1, 'hsl(360, 70%, 30%)');
+    context.fillStyle = gradient;
+    context.fillRect(0, 0, 1200, 800);
+    const image = context.getImageData(0, 0, 1200, 800);
+    let seed = 7;
+    for (let i = 0; i < image.data.length; i += 4) {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      const noise = (seed % 9) - 4;
+      image.data[i] += noise;
+      image.data[i + 1] += noise;
+      image.data[i + 2] += noise;
+    }
+    context.putImageData(image, 0, 0);
+    const blob = await new Promise<Blob>((resolve) => canvas.toBlob((b) => resolve(b!), 'image/png'));
+    const input = new Uint8Array(await blob.arrayBuffer());
+    const out = await window.pixieJuice!.optimize(input, {});
+    return { format: out.format, ...(await window.testing.compare(input, out.data)) };
+  });
+  expect(r.format).toBe('png');
+  expect(r.meanError).toBe(0);
+});
+
 test('WebP is re-encoded within budget, and lossless mode leaves pixels alone', async ({ page }) => {
   const r = await page.evaluate(async () => {
     const api = window.pixieJuice!;

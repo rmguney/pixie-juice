@@ -15,10 +15,18 @@
 
 #include <algorithm>
 #include <array>
+#include <clocale>
 #include <cstring>
 #include <memory>
 #include <string>
 #include <string_view>
+
+#if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
+#include <locale.h>  // newlocale, uselocale
+#ifdef __APPLE__
+#include <xlocale.h>
+#endif
+#endif
 
 // Defined in gltfpack.cpp, which has no header for them.
 Settings defaults();
@@ -64,6 +72,46 @@ Result<bool> packable(ByteView data) {
   return true;
 }
 
+/// The "C" locale on this thread while it lives. cgltf reads and gltfpack
+/// writes floats through the C library, which follows the host's locale: under
+/// a comma-decimal one ("de_DE") a library caller would get altered geometry.
+/// (WebAssembly only has the "C" locale.)
+class CLocaleScope {
+ public:
+  CLocaleScope() {
+#if defined(_WIN32)
+    mode_ = _configthreadlocale(_ENABLE_PER_THREAD_LOCALE);
+    if (const char* current = std::setlocale(LC_ALL, nullptr)) previous_ = current;
+    std::setlocale(LC_ALL, "C");
+#elif !defined(__EMSCRIPTEN__)
+    c_ = newlocale(LC_ALL_MASK, "C", locale_t(0));
+    if (c_) previous_ = uselocale(c_);
+#endif
+  }
+  ~CLocaleScope() {
+#if defined(_WIN32)
+    if (!previous_.empty()) std::setlocale(LC_ALL, previous_.c_str());
+    _configthreadlocale(mode_);
+#elif !defined(__EMSCRIPTEN__)
+    if (c_) {
+      uselocale(previous_);
+      freelocale(c_);
+    }
+#endif
+  }
+  CLocaleScope(const CLocaleScope&) = delete;
+  CLocaleScope& operator=(const CLocaleScope&) = delete;
+
+ private:
+#if defined(_WIN32)
+  int mode_ = 0;
+  std::string previous_;
+#elif !defined(__EMSCRIPTEN__)
+  locale_t c_ = locale_t(0);
+  locale_t previous_ = locale_t(0);
+#endif
+};
+
 }  // namespace
 
 Result<std::optional<Bytes>> optimize_gltf(ByteView data, Format format, const Options& options) {
@@ -88,8 +136,11 @@ Result<std::optional<Bytes>> optimize_gltf(ByteView data, Format format, const O
   settings.simplify_ratio = options.mesh_ratio;
   settings.verbose = 0;
 
-  if (const int code = gltfpack(input.path().c_str(), output.path().c_str(), nullptr, settings); code != 0) {
-    return fail("gltfpack could not process this file (code " + std::to_string(code) + ")");
+  {
+    const CLocaleScope c_locale;
+    if (const int code = gltfpack(input.path().c_str(), output.path().c_str(), nullptr, settings); code != 0) {
+      return fail("gltfpack could not process this file (code " + std::to_string(code) + ")");
+    }
   }
   auto bytes = output.read();
   if (!bytes || bytes->empty()) return fail("gltfpack produced no output");

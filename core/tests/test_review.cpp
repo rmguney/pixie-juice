@@ -11,7 +11,14 @@
 
 #include <algorithm>
 #include <array>
+#include <csetjmp>
+#include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <memory>
+
+#include <jpeglib.h>
+#include <zlib.h>
 
 using namespace pixie;
 using fixtures::as_text;
@@ -169,7 +176,16 @@ TEST_CASE("C9: glTF with extensions gltfpack can't carry over passes through") {
   const auto draco = text_bytes(
       R"({"asset":{"version":"2.0"},"extensionsUsed":["KHR_draco_mesh_compression"],)"
       R"("extensionsRequired":["KHR_draco_mesh_compression"]})");
-  const auto unknown = text_bytes(R"({"asset":{"version":"2.0"},"extensionsUsed":["EXT_lights_ies"]})");
+  // A mesh gltfpack makes smaller, and the same mesh using an extension it would drop.
+  const auto grid = fixtures::grid_gltf(16);
+  const auto plain = optimize(grid, {});
+  REQUIRE(plain.has_value());
+  REQUIRE(plain->changed);
+  auto unknown = grid;
+  const std::string_view asset = R"({"asset":{"version":"2.0"},)";
+  const std::string_view extension = R"("extensionsUsed":["EXT_lights_ies"],)";
+  REQUIRE(as_text(unknown).starts_with(asset));
+  unknown.insert(unknown.begin() + std::ptrdiff_t(asset.size()), extension.begin(), extension.end());
   for (const auto& input : {draco, unknown}) {
     const auto out = optimize(input, {});
     REQUIRE(out.has_value());
@@ -229,7 +245,8 @@ TEST_CASE("C12: STL and PLY details survive or pass through") {
       "3 0 1 2\n3 0 2 3\n");
   const auto out = optimize(ply, {});
   REQUIRE(out.has_value());
-  if (out->changed) CHECK(as_text(out->data).find("comment TextureFile wood.png") != std::string_view::npos);
+  REQUIRE(out->changed);
+  CHECK(as_text(out->data).find("comment TextureFile wood.png") != std::string_view::npos);
 
   // A polyline has no surface: the preview shows only the face.
   const auto with_line = text_bytes("v 0 0 0\nv 1 0 0\nv 0 1 0\nv 1 1 0\nf 1 2 3\nl 1 2 4 3\n");
@@ -346,4 +363,184 @@ TEST_CASE("TIFF layouts that can't be decoded here pass through") {
   const auto out = optimize(*file.read(), {});
   REQUIRE(out.has_value());
   CHECK_FALSE(out->changed);
+}
+
+namespace {
+
+/// A mozjpeg compression that stops itself halfway through its passes.
+struct StoppedCompression {
+  jpeg_compress_struct cinfo{};
+  jpeg_error_mgr errors{};
+  jpeg_progress_mgr progress{};
+  std::jmp_buf jump{};
+  unsigned char* output = nullptr;
+  unsigned long size = 0;
+};
+
+[[noreturn]] void jump_out(j_common_ptr cinfo) {
+  std::longjmp(static_cast<StoppedCompression*>(cinfo->client_data)->jump, 1);
+}
+
+// By then the earlier scans' buffers and the current one's are allocated.
+void stop_halfway(j_common_ptr cinfo) {
+  const jpeg_progress_mgr* progress = cinfo->progress;
+  if (progress->total_passes > 2 && progress->completed_passes * 2 >= progress->total_passes) jump_out(cinfo);
+}
+
+}  // namespace
+
+// LeakSanitizer (the native-asan build on Linux) fails the run if the buffers leak.
+TEST_CASE("S7: a compression stopped by an error frees its scan buffers") {
+  auto job = std::make_unique<StoppedCompression>();
+  jpeg_compress_struct& cinfo = job->cinfo;
+  cinfo.err = jpeg_std_error(&job->errors);
+  job->errors.error_exit = jump_out;
+  jpeg_create_compress(&cinfo);
+  cinfo.client_data = job.get();
+  job->progress.progress_monitor = stop_halfway;
+  cinfo.progress = &job->progress;
+  jpeg_mem_dest(&cinfo, &job->output, &job->size);
+
+  cinfo.image_width = 64;
+  cinfo.image_height = 64;
+  cinfo.input_components = 3;
+  cinfo.in_color_space = JCS_RGB;
+  jpeg_set_defaults(&cinfo);
+  jpeg_c_set_bool_param(&cinfo, JBOOLEAN_OPTIMIZE_SCANS, TRUE);
+  jpeg_simple_progression(&cinfo);
+
+  std::array<JSAMPLE, 64 * 3> row{};
+  bool stopped = true;
+  if (setjmp(job->jump) == 0) {
+    jpeg_start_compress(&cinfo, TRUE);
+    for (JDIMENSION y = 0; y < cinfo.image_height; ++y) {
+      for (std::size_t i = 0; i < row.size(); ++i) row[i] = JSAMPLE((i * 5 + y * 3) & 0xFF);
+      JSAMPROW rows[] = {row.data()};
+      jpeg_write_scanlines(&cinfo, rows, 1);
+    }
+    jpeg_finish_compress(&cinfo);
+    stopped = false;
+  }
+  CHECK(stopped);
+  jpeg_destroy_compress(&cinfo);
+  std::free(job->output);
+}
+
+// Findings of the follow-up review.
+
+TEST_CASE("Follow-up: a 32-bit icon with an all-zero alpha channel uses its AND mask") {
+  Bytes dib(40, 0);
+  auto put32 = [](Bytes& b, std::size_t at, std::uint32_t v) { std::memcpy(&b[at], &v, 4); };
+  put32(dib, 0, 40);
+  put32(dib, 4, 16);
+  put32(dib, 8, 32);  // doubled height
+  dib[12] = 1;
+  dib[14] = 32;
+  for (int i = 0; i < 16 * 16; ++i) dib.insert(dib.end(), {200, 100, 50, 0});  // BGRA with alpha unused
+  Bytes mask(16 * 4, 0);
+  mask[15 * 4] = 0x80;  // rows run bottom-up: the top-left pixel is transparent
+  dib.insert(dib.end(), mask.begin(), mask.end());
+  Bytes ico = {0, 0, 1, 0, 1, 0, 16, 16, 0, 0, 1, 0, 32, 0};
+  const auto size = std::uint32_t(dib.size());
+  ico.insert(ico.end(), {std::uint8_t(size), std::uint8_t(size >> 8), std::uint8_t(size >> 16), std::uint8_t(size >> 24)});
+  ico.insert(ico.end(), {22, 0, 0, 0});
+  ico.insert(ico.end(), dib.begin(), dib.end());
+  const auto image = decode(ico);
+  REQUIRE(image.has_value());
+  CHECK(image->rgba[3] == 0);
+  CHECK(image->rgba[4 + 3] == 255);
+}
+
+TEST_CASE("Follow-up: TIFF keeps straight alpha exactly, in grey and in colour") {
+  for (const bool grey : {true, false}) {
+    detail::Image image;
+    image.width = image.height = 8;
+    for (int i = 0; i < 64; ++i) {
+      const auto v = std::uint8_t(i * 4);
+      image.rgba.insert(image.rgba.end(), {v, grey ? v : std::uint8_t(255 - v), v, std::uint8_t(i % 2 ? 128 : 255)});
+    }
+    const auto png = detail::encode_png(image);
+    REQUIRE(png.has_value());
+    // Lossless conversion used to fail: decoding rounded the colour under partial alpha.
+    const auto tiff = convert(*png, Format::Tiff, {.lossless = true});
+    REQUIRE(tiff.has_value());
+    const auto back = decode(tiff->data);
+    REQUIRE(back.has_value());
+    CHECK(back->rgba == image.rgba);
+  }
+}
+
+TEST_CASE("Follow-up: OBJ numbers fast_obj can't read back pass through") {
+  for (const std::string first : {"v 1e25 0 0\n", "v 1 inf 5\n", "v 2.5e-21 0 0\n"}) {
+    std::string obj = first + "v 1.000000 0.000000 0.000000\nv 0.000000 1.000000 0.000000\nf 1 2 3\n";
+    obj += "# padding, so a rewrite would be smaller #################################################\n";
+    const auto out = optimize(text_bytes(obj), {});
+    REQUIRE(out.has_value());
+    CHECK_FALSE(out->changed);
+  }
+}
+
+TEST_CASE("Follow-up: OBJ header statements written with a tab are kept") {
+  std::string obj = "mtllib\tscene.mtl\nv 0.000000 0.000000 0.000000\nv 1.000000 0.000000 0.000000\n";
+  obj += "v 0.000000 1.000000 0.000000\nusemtl red\nf 1 2 3\n";
+  obj += "# padding, so the rewrite is smaller #####################################################\n";
+  const auto out = optimize(text_bytes(obj), {});
+  REQUIRE(out.has_value());
+  REQUIRE(out->changed);
+  CHECK(as_text(out->data).find("mtllib\tscene.mtl") != std::string_view::npos);
+}
+
+TEST_CASE("Follow-up: PNG text chunks are limited in total, not one by one") {
+  const auto base = detail::encode_png(fixtures::make_image(8, 8, 1));
+  REQUIRE(base.has_value());
+  const std::string text(9 * 1024 * 1024, 'a');
+  uLongf length = compressBound(uLong(text.size()));
+  Bytes compressed(length);
+  REQUIRE(compress2(compressed.data(), &length, reinterpret_cast<const Bytef*>(text.data()), uLong(text.size()), 9) == Z_OK);
+  compressed.resize(length);
+  Bytes body{'k', 0, 0};  // keyword, NUL, compression method
+  body.insert(body.end(), compressed.begin(), compressed.end());
+  auto with_chunks = [&](int count) {
+    Bytes png = *base;
+    for (int i = 0; i < count; ++i) {
+      unsigned char* chunk = nullptr;
+      std::size_t chunk_size = 0;
+      REQUIRE(lodepng_chunk_create(&chunk, &chunk_size, unsigned(body.size()), "zTXt", body.data()) == 0);
+      png.insert(png.begin() + 33, chunk, chunk + chunk_size);  // after IHDR
+      std::free(chunk);
+    }
+    return png;
+  };
+  CHECK(decode(with_chunks(1)).has_value());        // 9 MiB of text
+  CHECK_FALSE(decode(with_chunks(2)).has_value());  // 18 MiB in total
+}
+
+TEST_CASE("Follow-up: the first frame of an interlaced animated GIF decodes in row order") {
+  Bytes gif;
+  int error = 0;
+  GifFileType* writer = EGifOpen(&gif, [](GifFileType* g, const GifByteType* data, int length) {
+    static_cast<Bytes*>(g->UserData)->insert(static_cast<Bytes*>(g->UserData)->end(), data, data + length);
+    return length;
+  }, &error);
+  REQUIRE(writer);
+  const GifColorType colours[4] = {{0, 0, 0}, {255, 0, 0}, {0, 255, 0}, {0, 0, 255}};
+  writer->SWidth = writer->SHeight = 16;
+  writer->SColorResolution = 8;
+  writer->SColorMap = GifMakeMapObject(4, colours);
+  for (int f = 0; f < 2; ++f) {
+    SavedImage* frame = GifMakeSavedImage(writer, nullptr);
+    frame->ImageDesc = GifImageDesc{0, 0, 16, 16, true, nullptr};
+    frame->RasterBits = static_cast<GifByteType*>(std::malloc(256));
+    for (int i = 0; i < 256; ++i) frame->RasterBits[i] = GifByteType((i / 16 + f) % 4);
+  }
+  REQUIRE(EGifSpew(writer, &error) == GIF_OK);
+  const auto shown = decode(gif);
+  REQUIRE(shown.has_value());
+  for (std::size_t y = 0; y < 16; ++y) {
+    const GifColorType& expected = colours[y % 4];
+    const auto* px = &shown->rgba[y * 16 * 4];
+    CHECK(px[0] == expected.Red);
+    CHECK(px[1] == expected.Green);
+    CHECK(px[2] == expected.Blue);
+  }
 }

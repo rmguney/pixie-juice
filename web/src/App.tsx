@@ -19,6 +19,9 @@ const PREVIEW_MODES: { mode: PreviewMode; label: string }[] = [
   { mode: 'optimized', label: 'Optimized' },
 ];
 
+/** Each result's file, made once (copying its bytes) rather than on every selection; it goes with its result. */
+const resultFiles = new WeakMap<ProcessedResult, File>();
+
 /** Results together with the file list they were made for. */
 interface Run {
   files: File[];
@@ -86,8 +89,13 @@ export default function App() {
     const match = results?.find((r) => r.file === selectedFile);
     if (!selectedFile || !match?.success) return null;
     if (!match.changed) return selectedFile;
-    const { extension, mimeType } = outputFormat(match.format);
-    return new File([match.data as BlobPart], outputName(selectedFile.name, extension), { type: mimeType });
+    let file = resultFiles.get(match);
+    if (!file) {
+      const { extension, mimeType } = outputFormat(match.format);
+      file = new File([match.data as BlobPart], outputName(selectedFile.name, extension), { type: mimeType });
+      resultFiles.set(match, file);
+    }
+    return file;
   }, [selectedFile, results]);
 
   // Images can be compared on a split view; a mesh shows one side at a time.
@@ -161,13 +169,12 @@ export default function App() {
                   </span>
                 </p>
                 {modes.length > 0 && (
-                  <div role="tablist" aria-label="Preview source" className="segmented">
+                  <div role="group" aria-label="Preview source" className="segmented">
                     {modes.map(({ mode: option, label }) => (
                       <button
                         key={option}
                         type="button"
-                        role="tab"
-                        aria-selected={mode === option}
+                        aria-pressed={mode === option}
                         onClick={() => setPreviewMode(option)}
                       >
                         {label}

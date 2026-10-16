@@ -35,10 +35,15 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install Ninja
         run: sudo apt-get update && sudo apt-get install -y ninja-build
+      # The fetched sources and mozjpeg's archive: object files would rebuild anyway
+      # (ninja rebuilds whatever its log, which isn't cached, doesn't list).
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
-          path: build/native-asan/_deps
-          key: deps-native-${{ hashFiles('core/cmake/Dependencies.cmake') }}
+          path: |
+            build/native-asan/_deps/*-src
+            build/native-asan/_deps/*-subbuild
+            build/native-asan/mozjpeg_ep-prefix/src/*.tar.gz
+          key: deps-native-sources-${{ hashFiles('core/cmake/Dependencies.cmake', 'core/cmake/patches/**') }}
       - name: Configure
         run: cmake --preset native-asan
       - name: Build

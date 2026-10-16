@@ -1,6 +1,5 @@
 // Single-header library implementations, compiled once.
 
-#define STBI_ONLY_GIF
 #define STBI_ONLY_BMP
 #define STBI_ONLY_TGA
 #define STBI_NO_STDIO

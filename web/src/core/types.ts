@@ -1,4 +1,4 @@
-export type ImageFormat = 'png' | 'jpeg' | 'webp' | 'gif' | 'bmp' | 'tga' | 'tiff' | 'ico' | 'svg';
+type ImageFormat = 'png' | 'jpeg' | 'webp' | 'gif' | 'bmp' | 'tga' | 'tiff' | 'ico' | 'svg';
 export type MeshFormat = 'obj' | 'stl' | 'ply' | 'gltf' | 'glb' | 'fbx';
 export type FormatName = ImageFormat | MeshFormat;
 
@@ -29,13 +29,13 @@ export interface DecodedImage {
   rgba: Uint8ClampedArray;
 }
 
-/** Triangles of an OBJ, STL or PLY for display. */
+/** Triangles of an OBJ, STL or PLY, ready to display. */
 export interface DecodedMesh {
   /** xyz per vertex */
   positions: Float32Array;
-  /** xyz per vertex, when the file has normals */
-  normals?: Float32Array;
-  /** rgb in 0..1 per vertex as stored (normally sRGB), when the file has colours */
+  /** xyz per vertex: the file's, or smooth ones computed from the triangles */
+  normals: Float32Array;
+  /** linear rgb in 0..1 per vertex (files store sRGB), when the file has colours */
   colors?: Float32Array;
   /** three per triangle */
   indices: Uint32Array;
@@ -48,13 +48,18 @@ export interface BuildInfo {
   source: string;
 }
 
-/** The Pixie Juice engine, running in a Web Worker. */
+/**
+ * The Pixie Juice engine, running in Web Workers. With `transfer` set, `data`'s
+ * buffer moves to the worker instead of being copied, and is no longer usable.
+ */
 export interface PixieApi {
+  /** How many files it processes at once. */
+  readonly concurrency: number;
   info(): Promise<BuildInfo>;
   /** "image:png", "mesh:obj", ... or "unknown". */
   detect(data: Uint8Array): Promise<string>;
-  optimize(data: Uint8Array, options?: CoreOptions): Promise<CoreResult>;
-  convert(data: Uint8Array, target: ConvertTarget, options?: CoreOptions): Promise<CoreResult>;
-  decodeImage(data: Uint8Array): Promise<DecodedImage>;
-  decodeMesh(data: Uint8Array): Promise<DecodedMesh>;
+  optimize(data: Uint8Array, options?: CoreOptions, transfer?: boolean): Promise<CoreResult>;
+  convert(data: Uint8Array, target: ConvertTarget, options?: CoreOptions, transfer?: boolean): Promise<CoreResult>;
+  decodeImage(data: Uint8Array, transfer?: boolean): Promise<DecodedImage>;
+  decodeMesh(data: Uint8Array, transfer?: boolean): Promise<DecodedMesh>;
 }

@@ -11,15 +11,43 @@ const BROWSER_IMAGES = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'ico
 
 type Preview = { kind: 'url'; url: string } | { kind: 'pixels'; image: ImageData };
 
+/**
+ * Recently decoded files' pixels, most recent last: switching between the
+ * original, the result and the split view doesn't decode a TIFF or TGA again.
+ */
+const decodedPixels = new Map<File, Promise<ImageData>>();
+const DECODED_KEPT = 4;
+
+function pixelsOf(file: File): Promise<ImageData> {
+  let pixels = decodedPixels.get(file);
+  if (pixels) {
+    decodedPixels.delete(file);
+  } else {
+    pixels = file
+      .arrayBuffer()
+      .then((buffer) => getPixie().decodeImage(new Uint8Array(buffer), true))
+      .then(({ rgba, width, height }) => new ImageData(rgba, width, height));
+    pixels.catch(() => decodedPixels.delete(file));
+  }
+  decodedPixels.set(file, pixels);
+  if (decodedPixels.size > DECODED_KEPT) decodedPixels.delete(decodedPixels.keys().next().value!);
+  return pixels;
+}
+
+interface PreviewState {
+  file: File;
+  preview: Preview | null;
+  error: string | null;
+}
+
 /** An image file ready to show: an object URL for the browser, or pixels from the engine. */
 function useImagePreview(file: File, enabled = true) {
-  const [preview, setPreview] = useState<Preview | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // Kept with the file it belongs to, so a new file never shows the last one's image.
+  const [state, setState] = useState<PreviewState>({ file, preview: null, error: null });
 
   useEffect(() => {
     if (!enabled) return;
-    setPreview(null);
-    setError(null);
+    setState({ file, preview: null, error: null });
 
     let cancelled = false;
     let url: string | null = null;
@@ -27,15 +55,14 @@ function useImagePreview(file: File, enabled = true) {
       try {
         if (BROWSER_IMAGES.has(extensionOf(file.name))) {
           url = URL.createObjectURL(file);
-          if (!cancelled) setPreview({ kind: 'url', url });
+          if (!cancelled) setState({ file, preview: { kind: 'url', url }, error: null });
         } else {
-          const decoded = await getPixie().decodeImage(new Uint8Array(await file.arrayBuffer()));
-          if (!cancelled) {
-            setPreview({ kind: 'pixels', image: new ImageData(decoded.rgba, decoded.width, decoded.height) });
-          }
+          const image = await pixelsOf(file);
+          if (!cancelled) setState({ file, preview: { kind: 'pixels', image }, error: null });
         }
       } catch (err) {
-        if (!cancelled) setError(`Cannot preview ${file.name}: ${err instanceof Error ? err.message : String(err)}`);
+        const message = `Cannot preview ${file.name}: ${err instanceof Error ? err.message : String(err)}`;
+        if (!cancelled) setState({ file, preview: null, error: message });
       }
     })();
 
@@ -45,8 +72,9 @@ function useImagePreview(file: File, enabled = true) {
     };
   }, [file, enabled]);
 
-  const fail = (message: string) => setError(`Cannot preview ${file.name}: ${message}`);
-  return { preview, error, fail };
+  const current = state.file === file;
+  const fail = (message: string) => setState({ file, preview: null, error: `Cannot preview ${file.name}: ${message}` });
+  return { preview: current ? state.preview : null, error: current ? state.error : null, fail };
 }
 
 function DecodedImage({ image, label, className }: { image: ImageData; label: string; className?: string }) {

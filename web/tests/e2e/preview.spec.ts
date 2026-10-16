@@ -83,6 +83,172 @@ test('previews a .gltf whose buffer is embedded as a data: URI', async ({ page }
   await expectModelShown(page);
 });
 
+/** A 64×64 PNG, red on top and blue below, drawn in the page. */
+async function redBluePng(page: Page): Promise<Buffer> {
+  const bytes = await page.evaluate(async () => {
+    const canvas = Object.assign(document.createElement('canvas'), { width: 64, height: 64 });
+    const context = canvas.getContext('2d')!;
+    context.fillStyle = '#ff0000';
+    context.fillRect(0, 0, 64, 32);
+    context.fillStyle = '#0000ff';
+    context.fillRect(0, 32, 64, 32);
+    const blob = await new Promise<Blob>((resolve) => canvas.toBlob((b) => resolve(b!), 'image/png'));
+    return Array.from(new Uint8Array(await blob.arrayBuffer()));
+  });
+  return Buffer.from(bytes);
+}
+
+/** How many pixels of the preview are clearly red and clearly blue: the smaller count. */
+async function redAndBluePixels(page: Page): Promise<number> {
+  const shot = await page.getByTestId('mesh-preview').screenshot();
+  return page.evaluate(async (bytes) => {
+    const bitmap = await createImageBitmap(new Blob([new Uint8Array(bytes)], { type: 'image/png' }));
+    const canvas = Object.assign(document.createElement('canvas'), { width: bitmap.width, height: bitmap.height });
+    const context = canvas.getContext('2d')!;
+    context.drawImage(bitmap, 0, 0);
+    const { data } = context.getImageData(0, 0, bitmap.width, bitmap.height);
+    let red = 0;
+    let blue = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i] > 200 && data[i + 1] < 60 && data[i + 2] < 60) red++;
+      if (data[i + 2] > 200 && data[i] < 60 && data[i + 1] < 60) blue++;
+    }
+    return Math.min(red, blue);
+  }, Array.from(shot));
+}
+
+/** A GLB from its JSON and binary chunk, each padded to four bytes. */
+function glb(json: object, bin: Buffer): Buffer {
+  const text = Buffer.from(JSON.stringify(json));
+  const jsonChunk = Buffer.concat([text, Buffer.alloc((4 - (text.length % 4)) % 4, 0x20)]);
+  const binChunk = Buffer.concat([bin, Buffer.alloc((4 - (bin.length % 4)) % 4)]);
+  const header = Buffer.alloc(12);
+  header.writeUInt32LE(0x46546c67, 0); // "glTF"
+  header.writeUInt32LE(2, 4);
+  header.writeUInt32LE(12 + 8 + jsonChunk.length + 8 + binChunk.length, 8);
+  const chunk = (type: number, data: Buffer) => {
+    const head = Buffer.alloc(8);
+    head.writeUInt32LE(data.length, 0);
+    head.writeUInt32LE(type, 4);
+    return Buffer.concat([head, data]);
+  };
+  return Buffer.concat([header, chunk(0x4e4f534a, jsonChunk), chunk(0x004e4942, binChunk)]); // "JSON", "BIN"
+}
+
+test('previews a GLB with its texture', async ({ page }) => {
+  // A square on the ground, unlit, textured red on one half and blue on the other.
+  const png = await redBluePng(page);
+  const positions = Buffer.from(new Float32Array([-1, 0, -1, 1, 0, -1, 1, 0, 1, -1, 0, 1]).buffer);
+  const uvs = Buffer.from(new Float32Array([0, 0, 1, 0, 1, 1, 0, 1]).buffer);
+  const indices = Buffer.from(new Uint16Array([0, 2, 1, 0, 3, 2]).buffer);
+  const bin = Buffer.concat([positions, uvs, indices, png]);
+  const model = glb(
+    {
+      asset: { version: '2.0' },
+      extensionsUsed: ['KHR_materials_unlit'],
+      buffers: [{ byteLength: bin.length }],
+      bufferViews: [
+        { buffer: 0, byteOffset: 0, byteLength: 48 },
+        { buffer: 0, byteOffset: 48, byteLength: 32 },
+        { buffer: 0, byteOffset: 80, byteLength: 12 },
+        { buffer: 0, byteOffset: 92, byteLength: png.length },
+      ],
+      accessors: [
+        { bufferView: 0, componentType: 5126, count: 4, type: 'VEC3', min: [-1, 0, -1], max: [1, 0, 1] },
+        { bufferView: 1, componentType: 5126, count: 4, type: 'VEC2' },
+        { bufferView: 2, componentType: 5123, count: 6, type: 'SCALAR' },
+      ],
+      images: [{ bufferView: 3, mimeType: 'image/png' }],
+      textures: [{ source: 0 }],
+      materials: [
+        { pbrMetallicRoughness: { baseColorTexture: { index: 0 } }, doubleSided: true, extensions: { KHR_materials_unlit: {} } },
+      ],
+      meshes: [{ primitives: [{ attributes: { POSITION: 0, TEXCOORD_0: 1 }, indices: 2, material: 0 }] }],
+      nodes: [{ mesh: 0 }],
+      scenes: [{ nodes: [0] }],
+      scene: 0,
+    },
+    bin,
+  );
+  await preview(page, 'textured.glb', model);
+  await expectModelShown(page);
+
+  // Both texture colours reach the screen.
+  await expect.poll(() => redAndBluePixels(page)).toBeGreaterThan(500);
+});
+
+test('previews an ASCII FBX with an embedded texture and a camera', async ({ page }) => {
+  const png = await redBluePng(page);
+  const fbx = [
+    '; FBX 7.3.0 project file',
+    'FBXHeaderExtension:  {',
+    '\tFBXHeaderVersion: 1003',
+    '\tFBXVersion: 7300',
+    '}',
+    'Objects:  {',
+    '\tGeometry: 1000, "Geometry::quad", "Mesh" {',
+    '\t\tVertices: *12 {',
+    '\t\t\ta: -1,0,-1,1,0,-1,1,0,1,-1,0,1',
+    '\t\t}',
+    // One quad facing up (counter-clockwise seen from above), with normals for the lighting.
+    '\t\tPolygonVertexIndex: *4 {',
+    '\t\t\ta: 0,3,2,-2',
+    '\t\t}',
+    '\t\tLayerElementNormal: 0 {',
+    '\t\t\tMappingInformationType: "ByPolygonVertex"',
+    '\t\t\tReferenceInformationType: "Direct"',
+    '\t\t\tNormals: *12 {',
+    '\t\t\t\ta: 0,1,0,0,1,0,0,1,0,0,1,0',
+    '\t\t\t}',
+    '\t\t}',
+    '\t\tLayerElementUV: 0 {',
+    '\t\t\tMappingInformationType: "ByPolygonVertex"',
+    '\t\t\tReferenceInformationType: "IndexToDirect"',
+    '\t\t\tUV: *8 {',
+    '\t\t\t\ta: 0,0,1,0,1,1,0,1',
+    '\t\t\t}',
+    '\t\t\tUVIndex: *4 {',
+    '\t\t\t\ta: 0,3,2,1',
+    '\t\t\t}',
+    '\t\t}',
+    '\t}',
+    '\tModel: 2000, "Model::quad", "Mesh" {',
+    '\t\tVersion: 232',
+    '\t}',
+    '\tMaterial: 3000, "Material::painted", "" {',
+    '\t\tShadingModel: "lambert"',
+    '\t}',
+    '\tTexture: 4000, "Texture::paint", "" {',
+    '\t\tFileName: "paint.png"',
+    '\t}',
+    '\tVideo: 5000, "Video::paint", "Clip" {',
+    '\t\tRelativeFilename: "paint.png"',
+    '\t\tContent: ,',
+    `\t\t\t"${png.toString('base64')}"`,
+    '\t}',
+    '\tNodeAttribute: 6000, "NodeAttribute::camera", "Camera" {',
+    '\t\tTypeFlags: "Camera"',
+    '\t}',
+    '\tModel: 7000, "Model::camera", "Camera" {',
+    '\t\tVersion: 232',
+    '\t}',
+    '}',
+    'Connections:  {',
+    '\tC: "OO",1000,2000',
+    '\tC: "OO",2000,0',
+    '\tC: "OO",3000,2000',
+    '\tC: "OP",4000,3000, "DiffuseColor"',
+    '\tC: "OO",5000,4000',
+    '\tC: "OO",6000,7000',
+    '\tC: "OO",7000,0',
+    '}',
+    '',
+  ].join('\n');
+  await preview(page, 'painted.fbx', Buffer.from(fbx));
+  await expectModelShown(page);
+  await expect.poll(() => redAndBluePixels(page)).toBeGreaterThan(500);
+});
+
 test('previews an ASCII FBX', async ({ page }) => {
   // FBX's text form: one tab of indentation per nesting level.
   const fbx = [

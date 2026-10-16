@@ -93,9 +93,25 @@ Layout read_layout(TIFF* tif) {
   TIFFGetField(tif, TIFFTAG_PHOTOMETRIC, &l.photometric);
   std::uint16_t extra_count = 0;
   std::uint16_t* extra = nullptr;
-  if (TIFFGetField(tif, TIFFTAG_EXTRASAMPLES, &extra_count, &extra) && extra_count > 0) l.extra_type = extra[0];
+  if (TIFFGetField(tif, TIFFTAG_EXTRASAMPLES, &extra_count, &extra) && extra_count > 0) {
+    l.extra_type = extra[0];
+  } else if (l.photometric == PHOTOMETRIC_RGB && l.samples == 4) {
+    l.extra_type = EXTRASAMPLE_ASSOCALPHA;  // what libtiff assumes for a fourth sample without the tag
+  }
   l.multi_page = TIFFNumberOfDirectories(tif) > 1;
   return l;
+}
+
+/// Straight colour from colour premultiplied by alpha.
+void unpremultiply(Image& image) {
+  for (std::size_t i = 0; i < image.rgba.size(); i += 4) {
+    const unsigned a = image.rgba[i + 3];
+    if (a != 0 && a != 255) {
+      for (int c = 0; c < 3; ++c) {
+        image.rgba[i + c] = std::uint8_t(std::min(255u, (image.rgba[i + c] * 255u + a / 2) / a));
+      }
+    }
+  }
 }
 
 /// Layouts an 8-bit RGBA round trip reproduces exactly.
@@ -228,37 +244,38 @@ Result<Image> decode_tiff(ByteView data) {
   MemoryFile file{data};
   TIFF* tif = open(file, "r");
   if (!tif) return fail("Not a valid TIFF");
-  std::uint32_t width = 0, height = 0;
+  const Layout layout = read_layout(tif);
   std::uint16_t orientation = ORIENTATION_TOPLEFT;
-  TIFFGetField(tif, TIFFTAG_IMAGEWIDTH, &width);
-  TIFFGetField(tif, TIFFTAG_IMAGELENGTH, &height);
   TIFFGetFieldDefaulted(tif, TIFFTAG_ORIENTATION, &orientation);
-  if (width == 0 || height == 0 || std::uint64_t(width) * height > kMaxPixels) {
+  if (layout.width == 0 || layout.height == 0 || std::uint64_t(layout.width) * layout.height > kMaxPixels) {
     TIFFClose(tif);
     return fail("TIFF dimensions too large");
   }
+  // The layouts optimizing re-encodes are read sample for sample, so a round
+  // trip is exact; only colour stored premultiplied is converted to straight alpha.
+  if (reproducible(layout)) {
+    if (auto image = read_samples(tif, layout)) {
+      TIFFClose(tif);
+      if (layout.extra_type == EXTRASAMPLE_ASSOCALPHA) unpremultiply(*image);
+      return std::move(*image);
+    }
+  }
   Image image;
-  image.width = width;
-  image.height = height;
+  image.width = layout.width;
+  image.height = layout.height;
   image.rgba.resize(image.pixel_count() * 4);
   // Asking for the file's own orientation gives rows in stored order (libtiff
   // only flips, and mishandles the transposed orientations 5-8); display
   // orientation is applied by apply_orientation like every other format.
   // ABGR words in memory are R, G, B, A bytes on little-endian hosts (x86, WASM).
   // stop_on_error: a truncated or damaged strip is an error, not rows of garbage.
-  const int ok = TIFFReadRGBAImageOriented(tif, width, height, reinterpret_cast<std::uint32_t*>(image.rgba.data()),
-                                           orientation, 1);
+  const int ok = TIFFReadRGBAImageOriented(tif, layout.width, layout.height,
+                                           reinterpret_cast<std::uint32_t*>(image.rgba.data()), orientation, 1);
   TIFFClose(tif);
   if (!ok) return fail("TIFF decode failed");
-  // TIFFReadRGBAImage returns premultiplied colour; convert back to straight alpha.
-  for (std::size_t i = 0; i < image.rgba.size(); i += 4) {
-    const unsigned a = image.rgba[i + 3];
-    if (a != 0 && a != 255) {
-      for (int c = 0; c < 3; ++c) {
-        image.rgba[i + c] = std::uint8_t(std::min(255u, (image.rgba[i + c] * 255u + a / 2) / a));
-      }
-    }
-  }
+  // libtiff premultiplies colour (greyscale it returns straight); convert back to straight alpha.
+  const bool grey = layout.photometric == PHOTOMETRIC_MINISBLACK || layout.photometric == PHOTOMETRIC_MINISWHITE;
+  if (!grey) unpremultiply(image);
   return image;
 }
 

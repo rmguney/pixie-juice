@@ -25,15 +25,16 @@ function siteVersion(): string {
 }
 
 // The production page's Content Security Policy, as a <meta> tag (the dev
-// server needs inline scripts). Scripts, workers and WebAssembly come from this
-// origin; the Draco decoder runs in a blob: worker; previews read user files
-// through blob: and data: URLs. Inline style attributes set slider fills.
-// vercel.json adds the headers a <meta> tag can't set, such as frame-ancestors.
+// server needs inline scripts). Scripts and workers come from this origin; the
+// WebAssembly engine and the model decoders run in those workers, which have a
+// policy of their own. Image previews read user files through blob: URLs (data:
+// for the select arrow). Inline style attributes set slider fills. vercel.json
+// adds the headers a <meta> tag can't set, such as frame-ancestors.
 const contentSecurityPolicy = [
   "default-src 'self'",
-  "script-src 'self' 'wasm-unsafe-eval'",
-  "worker-src 'self' blob:",
-  "connect-src 'self' data: blob:",
+  "script-src 'self'",
+  "worker-src 'self'",
+  "connect-src 'self'",
   "img-src 'self' data: blob:",
   "style-src 'self' 'unsafe-inline'",
   "object-src 'none'",

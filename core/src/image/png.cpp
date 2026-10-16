@@ -28,7 +28,7 @@ std::uint32_t be32(const std::uint8_t* p) {
   return std::uint32_t(p[0]) << 24 | std::uint32_t(p[1]) << 16 | std::uint32_t(p[2]) << 8 | p[3];
 }
 
-std::optional<Bytes> run_zopflipng(ByteView input, bool use_zopfli, bool preserve_metadata) {
+std::optional<Bytes> run_zopflipng(const Bytes& input, bool use_zopfli, bool preserve_metadata) {
   ZopfliPNGOptions options;
   options.verbose = false;
   options.lossy_transparent = false;  // keep RGB under alpha = 0, so pixels stay exact
@@ -43,9 +43,8 @@ std::optional<Bytes> run_zopflipng(ByteView input, bool use_zopfli, bool preserv
   if (preserve_metadata) {
     options.keepchunks.insert(options.keepchunks.end(), {"pHYs", "tEXt", "zTXt", "iTXt", "eXIf", "tIME"});
   }
-  const Bytes original(input.begin(), input.end());
   Bytes result;
-  if (ZopfliPNGOptimize(original, options, false, &result) != 0 || result.empty()) return std::nullopt;
+  if (ZopfliPNGOptimize(input, options, false, &result) != 0 || result.empty()) return std::nullopt;
   return result;
 }
 
@@ -165,7 +164,7 @@ std::vector<Bytes> png_candidates(ByteView input, const Options& options) {
   if (lodepng_inspect(&width, &height, &state, input.data(), input.size()) != 0) return candidates;
   const bool use_zopfli = std::size_t(width) * height <= kZopfliMaxPixels;
 
-  if (auto result = run_zopflipng(input, use_zopfli, options.preserve_metadata);
+  if (auto result = run_zopflipng(Bytes(input.begin(), input.end()), use_zopfli, options.preserve_metadata);
       result && match_profile_to_colour_type(*result)) {
     if (!options.preserve_metadata) {
       if (const int orientation = read_colour_info(input, Format::Png).orientation; orientation != 1) {
@@ -199,11 +198,11 @@ Result<Bytes> encode_png(const Image& image, ByteView icc) {
 
 namespace {
 
-/// Inflates `parts` as one zlib stream into a scratch buffer, failing once the
-/// output passes `limit`; corrupt data is left for lodepng to report.
-bool inflates_within(const std::vector<ByteView>& parts, std::uint64_t limit) {
+/// The size `parts` inflate to as one zlib stream, inflated into a scratch
+/// buffer; nullopt once it passes `limit`. Corrupt data is left for lodepng to report.
+std::optional<std::uint64_t> inflated_size(const std::vector<ByteView>& parts, std::uint64_t limit) {
   z_stream z{};
-  if (inflateInit(&z) != Z_OK) return false;
+  if (inflateInit(&z) != Z_OK) return std::nullopt;
   std::array<unsigned char, 32768> scratch;
   std::uint64_t total = 0;
   int status = Z_OK;
@@ -217,20 +216,23 @@ bool inflates_within(const std::vector<ByteView>& parts, std::uint64_t limit) {
       total += scratch.size() - z.avail_out;
       if (total > limit) {
         inflateEnd(&z);
-        return false;
+        return std::nullopt;
       }
     } while (status == Z_OK && (z.avail_in > 0 || z.avail_out == 0));
-    if (status != Z_OK) break;
+    // Z_BUF_ERROR: this part is used up (it can end exactly as the scratch buffer fills).
+    if (status != Z_OK && status != Z_BUF_ERROR) break;  // the stream ended, or is corrupt
   }
   inflateEnd(&z);
-  return true;
+  return total;
 }
 
 }  // namespace
 
 bool png_within_limits(ByteView data) {
-  // Text and profile chunks are inflated whole by lodepng; real ones are far below this.
+  // Text and profile chunks are inflated whole by lodepng (zopflipng reads them
+  // all); real ones total far below this.
   constexpr std::uint64_t kMaxAncillary = 16 * 1024 * 1024;
+  std::uint64_t ancillary = 0;
   if (data.size() < kSignatureAndHeader) return true;  // lodepng reports it
   const std::uint64_t width = be32(data.data() + 16), height = be32(data.data() + 20);
   const unsigned depth = data[24], colour_type = data[25];
@@ -270,11 +272,22 @@ bool png_within_limits(ByteView data) {
       } else {
         at += 1;
       }
-      if (compressed && at < body.size() && !inflates_within({body.subspan(at)}, kMaxAncillary)) return false;
+      if (compressed && at < body.size()) {
+        const auto size = inflated_size({body.subspan(at)}, kMaxAncillary - ancillary);
+        if (!size) return false;
+        ancillary += *size;
+      }
     }
     pos += 12 + length;
   }
-  return inflates_within(image_data, expected);
+  return inflated_size(image_data, expected).has_value();
+}
+
+bool png_decodable(ByteView data) {
+  unsigned width = 0, height = 0;
+  lodepng::State state;
+  return lodepng_inspect(&width, &height, &state, data.data(), data.size()) == 0 && width && height &&
+         std::uint64_t(width) * height <= kMaxPixels && png_within_limits(data);
 }
 
 }  // namespace pixie::detail

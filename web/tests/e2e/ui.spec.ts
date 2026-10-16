@@ -39,7 +39,7 @@ test('optimizes an upload end to end and names the download by its real format',
   expect((await download).suggestedFilename()).toBe('holiday photo_juice.webp');
 
   // The optimized file can be previewed next to the original.
-  await page.getByRole('tab', { name: 'Optimized' }).click();
+  await page.getByRole('button', { name: 'Optimized', exact: true }).click();
   await expect(page.getByAltText('Preview of holiday photo_juice.webp')).toBeVisible();
 
   await page.getByRole('button', { name: 'Start over' }).click();
@@ -53,7 +53,7 @@ test('compares the original and the optimized image on a split view', async ({ p
   await page.getByRole('button', { name: 'Optimize 1 file' }).click();
 
   // The split view opens after a run, the original left of the divider and the result right of it.
-  await expect(page.getByRole('tab', { name: 'Compare' })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByRole('button', { name: 'Compare', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByAltText('Preview of photo.png')).toBeVisible();
   await expect(page.getByAltText('Preview of photo_juice.webp')).toBeVisible();
 
@@ -89,8 +89,8 @@ test('meshes show one side at a time', async ({ page }) => {
   });
   await page.getByRole('button', { name: 'Optimize 1 file' }).click();
   await expect(page.getByRole('heading', { name: 'Results' })).toBeVisible();
-  await expect(page.getByRole('tablist', { name: 'Preview source' }).getByRole('tab')).toHaveText(['Original', 'Optimized']);
-  await expect(page.getByRole('tab', { name: 'Original' })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByRole('group', { name: 'Preview source' }).getByRole('button')).toHaveText(['Original', 'Optimized']);
+  await expect(page.getByRole('button', { name: 'Original', exact: true })).toHaveAttribute('aria-pressed', 'true');
 });
 
 test('changing the file list after processing discards the results', async ({ page }) => {
@@ -110,29 +110,65 @@ test('changing the file list after processing discards the results', async ({ pa
 
 test('changing the file list during a run stops it without results', async ({ page }) => {
   await openApp(page);
-  // zopfli on a large noisy PNG keeps the first file busy while the list is edited.
-  const slow = await page.evaluate(async () =>
-    Array.from(await window.testing.makeImage({ width: 400, height: 400, mime: 'image/png', noise: 60 })),
+  // zopfli on noisy PNGs keeps each file busy for a while, so most are still waiting when the list changes.
+  const png = await page.evaluate(async () =>
+    Array.from(await window.testing.makeImage({ width: 300, height: 300, mime: 'image/png', noise: 60 })),
   );
-  await page.locator('#file-input').setInputFiles({ name: 'slow.png', mimeType: 'image/png', buffer: Buffer.from(slow) });
-  await uploadPng(page, 'next.png');
-  await uploadPng(page, 'last.png');
+  const names = Array.from({ length: 10 }, (_, i) => `photo-${i}.png`);
+  await page
+    .locator('#file-input')
+    .setInputFiles(names.map((name) => ({ name, mimeType: 'image/png', buffer: Buffer.from(png) })));
+  // Counts the files the engine is asked to optimize, and notes whether results ever appear.
   await page.evaluate(() => {
-    const seen: { results: boolean; next: boolean } = { results: false, next: false };
+    const seen = { calls: 0, results: false };
     (window as unknown as { seen: typeof seen }).seen = seen;
+    const api = window.pixieJuice!;
+    const optimize = api.optimize.bind(api);
+    api.optimize = (...args) => {
+      seen.calls++;
+      return optimize(...args);
+    };
     new MutationObserver(() => {
       seen.results ||= [...document.querySelectorAll('h2')].some((h) => h.textContent === 'Results');
-      seen.next ||= document.querySelector('.progress-meta')?.textContent?.includes('next.png') ?? false;
+    }).observe(document.body, { childList: true, subtree: true });
+  });
+
+  await page.getByRole('button', { name: 'Optimize 10 files' }).click();
+  await expect(page.getByRole('progressbar', { name: 'Processing progress' })).toBeVisible();
+  await page.getByRole('button', { name: 'Remove photo-9.png' }).click();
+
+  // The files in progress finish, the rest never start, and no results for the old list appear.
+  await expect(page.getByRole('button', { name: 'Optimize 9 files' })).toBeVisible({ timeout: 45_000 });
+  const seen = await page.evaluate(() => (window as unknown as { seen: { calls: number; results: boolean } }).seen);
+  expect(seen.results).toBe(false);
+  expect(seen.calls).toBeLessThan(names.length);
+});
+
+test('processes several files at once, results in list order', async ({ page }) => {
+  await openApp(page);
+  const concurrency = await page.evaluate(() => window.pixieJuice!.concurrency);
+  const png = await page.evaluate(async () =>
+    Array.from(await window.testing.makeImage({ width: 200, height: 200, mime: 'image/png', noise: 60 })),
+  );
+  const names = Array.from({ length: 6 }, (_, i) => `photo-${i}.png`);
+  await page
+    .locator('#file-input')
+    .setInputFiles(names.map((name) => ({ name, mimeType: 'image/png', buffer: Buffer.from(png) })));
+  await page.evaluate(() => {
+    const seen = { most: 0 };
+    (window as unknown as { seen: typeof seen }).seen = seen;
+    new MutationObserver(() => {
+      const active = document.querySelector('.progress-meta span')?.textContent?.split(', ').filter(Boolean) ?? [];
+      seen.most = Math.max(seen.most, active.length);
     }).observe(document.body, { childList: true, subtree: true, characterData: true });
   });
 
-  await page.getByRole('button', { name: 'Optimize 3 files' }).click();
-  await expect(page.getByRole('progressbar', { name: 'Processing progress' })).toBeVisible();
-  await page.getByRole('button', { name: 'Remove last.png' }).click();
-
-  // The file in progress finishes, nothing after it starts, and no results for the old list appear.
-  await expect(page.getByRole('button', { name: 'Optimize 2 files' })).toBeVisible({ timeout: 45_000 });
-  expect(await page.evaluate(() => (window as unknown as { seen: object }).seen)).toEqual({ results: false, next: false });
+  await page.getByRole('button', { name: 'Optimize 6 files' }).click();
+  const results = page.getByRole('list', { name: 'Processed files' }).getByRole('listitem');
+  await expect(results).toHaveCount(6, { timeout: 45_000 });
+  expect(await results.locator('.row-name').allTextContents()).toEqual(names);
+  const most = await page.evaluate(() => (window as unknown as { seen: { most: number } }).seen.most);
+  expect(most).toBe(Math.min(concurrency, names.length));
 });
 
 test('Download all saves every result under its own name', async ({ page }) => {
@@ -244,6 +280,7 @@ test('shows the mesh detail control only for meshes', async ({ page }) => {
   });
   await expect(page.getByLabel('Mesh triangles kept')).toBeVisible();
   await page.getByRole('button', { name: 'Preview triangle.obj' }).click();
+  await expect(page.getByTestId('mesh-preview')).toHaveAttribute('aria-busy', 'false');
   await expect(page.getByTestId('mesh-preview').locator('canvas')).toBeVisible();
   await expect(page.getByText(/Cannot preview/)).toHaveCount(0);
 });

@@ -7,8 +7,11 @@
 
 function(pixie_source_hash core out)
   get_filename_component(core ${core} ABSOLUTE)
-  file(GLOB_RECURSE files RELATIVE ${core}
-    ${core}/CMakeLists.txt ${core}/CMakePresets.json ${core}/cmake/* ${core}/include/* ${core}/src/*)
+  # The top-level files on their own: GLOB_RECURSE would also match them in any
+  # subdirectory (such as a build directory inside core/).
+  file(GLOB top RELATIVE ${core} ${core}/CMakeLists.txt ${core}/CMakePresets.json)
+  file(GLOB_RECURSE nested RELATIVE ${core} ${core}/cmake/* ${core}/include/* ${core}/src/*)
+  set(files ${top} ${nested})
   list(SORT files)
   set(manifest "")
   foreach(file IN LISTS files)

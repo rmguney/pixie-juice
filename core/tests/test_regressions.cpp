@@ -88,8 +88,10 @@ TEST_CASE("OBJ faces before the first usemtl keep having no material") {
   for (int i = 0; i < 6; ++i) obj += "v " + std::to_string(i) + ".000000 0.000000 " + std::to_string(i % 2) + ".000000\n";
   obj += "f 1 2 3\nusemtl red\nf 4 5 6\n";
   obj += "# padding so the rewrite is smaller ##############################################\n";
-  const auto bytes = result_of(text_bytes(obj));
-  const auto out = as_text(bytes);
+  const auto optimized = optimize(text_bytes(obj), {});
+  REQUIRE(optimized.has_value());
+  REQUIRE(optimized->changed);
+  const auto out = as_text(optimized->data);
   const auto first_face = out.find("\nf ");
   const auto first_material = out.find("usemtl red");
   REQUIRE(first_face != std::string_view::npos);

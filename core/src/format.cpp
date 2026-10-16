@@ -153,7 +153,9 @@ Format detect(ByteView data) {
   if (auto text = skip_space(text_prefix(data)); !text.empty()) {
     if (text.starts_with("<?xml") || text.starts_with("<svg") || text.starts_with("<!DOCTYPE svg") ||
         text.starts_with("<!--")) {
-      if (text.find("<svg") != std::string_view::npos) return Format::Svg;
+      // A licence comment or DOCTYPE can push the root element far into the file.
+      const std::string_view whole(reinterpret_cast<const char*>(data.data()), data.size());
+      if (whole.find("<svg") != std::string_view::npos) return Format::Svg;
     }
     if (text.starts_with("{")) {
       // The "asset" property can come after large embedded buffers, so search the whole file.
