@@ -13,9 +13,12 @@
 #include <cgltf.h>
 #include <gltfpack.h>
 
+#include <algorithm>
+#include <array>
 #include <cstring>
 #include <memory>
 #include <string>
+#include <string_view>
 
 // Defined in gltfpack.cpp, which has no header for them.
 Settings defaults();
@@ -25,11 +28,22 @@ namespace pixie::detail {
 
 namespace {
 
-/// gltfpack resolves buffer and image URIs against the input's directory, so
-/// only files whose resources are all embedded (GLB chunk or data: URI) are
-/// passed on: anything else isn't part of the input, and natively it would
-/// read from the local file system.
-Result<void> check_self_contained(ByteView data) {
+/// Extensions gltfpack 1.3 carries through. It skips any other extension, even
+/// a required one, with only a warning; it refuses Draco outright.
+constexpr std::array<std::string_view, 22> kCarriedExtensions{
+    "KHR_mesh_quantization", "EXT_meshopt_compression", "KHR_meshopt_compression", "KHR_texture_transform",
+    "KHR_materials_pbrSpecularGlossiness", "KHR_materials_clearcoat", "KHR_materials_transmission",
+    "KHR_materials_ior", "KHR_materials_specular", "KHR_materials_sheen", "KHR_materials_volume",
+    "KHR_materials_emissive_strength", "KHR_materials_iridescence", "KHR_materials_anisotropy",
+    "KHR_materials_dispersion", "KHR_materials_diffuse_transmission", "KHR_materials_unlit",
+    "KHR_materials_variants", "KHR_lights_punctual", "KHR_texture_basisu", "EXT_texture_webp",
+    "EXT_mesh_gpu_instancing"};
+
+/// Whether gltfpack can take the file: it must parse, its resources must all be
+/// embedded (GLB chunk or data: URI; gltfpack resolves any other URI against the
+/// input's directory, which natively reads the local file system), and every
+/// extension it uses must be one gltfpack carries (false: pass it through).
+Result<bool> packable(ByteView data) {
   const cgltf_options options{};
   cgltf_data* parsed = nullptr;
   if (cgltf_parse(&options, data.data(), data.size(), &parsed) != cgltf_result_success) {
@@ -41,13 +55,21 @@ Result<void> check_self_contained(ByteView data) {
   for (cgltf_size i = 0; i < parsed->buffers_count; ++i) references_files |= external(parsed->buffers[i].uri);
   for (cgltf_size i = 0; i < parsed->images_count; ++i) references_files |= external(parsed->images[i].uri);
   if (references_files) return fail("glTF references external files; use GLB or embedded data");
-  return {};
+  for (cgltf_size i = 0; i < parsed->extensions_used_count; ++i) {
+    const std::string_view name = parsed->extensions_used[i];
+    if (std::find(kCarriedExtensions.begin(), kCarriedExtensions.end(), name) == kCarriedExtensions.end()) {
+      return false;
+    }
+  }
+  return true;
 }
 
 }  // namespace
 
-Result<Bytes> optimize_gltf(ByteView data, Format format, const Options& options) {
-  if (auto contained = check_self_contained(data); !contained) return std::unexpected(contained.error());
+Result<std::optional<Bytes>> optimize_gltf(ByteView data, Format format, const Options& options) {
+  const auto accepted = packable(data);
+  if (!accepted) return std::unexpected(accepted.error());
+  if (!*accepted) return std::optional<Bytes>{};
 
   TempFile input(format == Format::Glb ? ".glb" : ".gltf");
   TempFile output(".glb");
@@ -71,7 +93,7 @@ Result<Bytes> optimize_gltf(ByteView data, Format format, const Options& options
   }
   auto bytes = output.read();
   if (!bytes || bytes->empty()) return fail("gltfpack produced no output");
-  return std::move(*bytes);
+  return std::optional<Bytes>(std::move(*bytes));
 }
 
 }  // namespace pixie::detail

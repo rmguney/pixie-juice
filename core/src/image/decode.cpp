@@ -1,11 +1,12 @@
 // First-frame RGBA decoding for verification and conversion, each format
 // through its own library: lodepng (PNG), mozjpeg (JPEG), libwebp (WebP),
-// libtiff (TIFF), stb_image (GIF, BMP, TGA, and BMP icon entries).
+// libtiff (TIFF), giflib (GIF), stb_image (BMP, TGA, and BMP icon entries).
 
 #include "internal.hpp"
 
 #include <lodepng.h>
 #include <stb_image.h>
+#include <webp/decode.h>
 #include <webp/demux.h>
 
 #include <algorithm>
@@ -28,6 +29,7 @@ Result<Image> decode_png(ByteView data) {
     return fail("Not a valid PNG");
   }
   if (too_large(width, height)) return fail("PNG dimensions too large");
+  if (!png_within_limits(data)) return fail("PNG data inflates beyond its declared size");
   Image image;
   if (const unsigned error = lodepng::decode(image.rgba, width, height, data.data(), data.size(), LCT_RGBA, 8)) {
     return fail(std::string("PNG decode failed: ") + lodepng_error_text(error));
@@ -40,6 +42,10 @@ Result<Image> decode_png(ByteView data) {
 namespace {
 
 Result<Image> decode_webp(ByteView data) {
+  // The animation decoder allocates its canvas on creation: check the size first.
+  int width = 0, height = 0;
+  if (!WebPGetInfo(data.data(), data.size(), &width, &height)) return fail("Not a valid WebP");
+  if (too_large(std::uint64_t(width), std::uint64_t(height))) return fail("WebP dimensions too large");
   WebPAnimDecoderOptions options;
   WebPAnimDecoderOptionsInit(&options);
   options.color_mode = MODE_RGBA;
@@ -89,7 +95,7 @@ Result<Image> decode_rgba(ByteView data, Format format) {
     case Format::Png: return decode_png(data);
     case Format::Jpeg: return decode_jpeg(data);
     case Format::WebP: return decode_webp(data);
-    case Format::Gif: return decode_stb(data, "GIF");
+    case Format::Gif: return decode_gif(data);
     case Format::Bmp: return decode_stb(data, "BMP");
     case Format::Tga: return decode_stb(data, "TGA");
     case Format::Ico: return decode_ico(data);

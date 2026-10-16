@@ -245,8 +245,9 @@ Result<Image> decode_tiff(ByteView data) {
   // only flips, and mishandles the transposed orientations 5-8); display
   // orientation is applied by apply_orientation like every other format.
   // ABGR words in memory are R, G, B, A bytes on little-endian hosts (x86, WASM).
+  // stop_on_error: a truncated or damaged strip is an error, not rows of garbage.
   const int ok = TIFFReadRGBAImageOriented(tif, width, height, reinterpret_cast<std::uint32_t*>(image.rgba.data()),
-                                           orientation, 0);
+                                           orientation, 1);
   TIFFClose(tif);
   if (!ok) return fail("TIFF decode failed");
   // TIFFReadRGBAImage returns premultiplied colour; convert back to straight alpha.
@@ -259,6 +260,19 @@ Result<Image> decode_tiff(ByteView data) {
     }
   }
   return image;
+}
+
+bool tiff_passes_through(ByteView data) {
+  MemoryFile file{data};
+  TIFF* tif = open(file, "r");
+  if (!tif) return false;
+  std::uint16_t compression = COMPRESSION_NONE, sample_format = SAMPLEFORMAT_UINT;
+  TIFFGetFieldDefaulted(tif, TIFFTAG_COMPRESSION, &compression);
+  TIFFGetFieldDefaulted(tif, TIFFTAG_SAMPLEFORMAT, &sample_format);
+  const bool undecodable = !TIFFIsCODECConfigured(compression) || sample_format == SAMPLEFORMAT_IEEEFP ||
+                           sample_format == SAMPLEFORMAT_COMPLEXIEEEFP || sample_format == SAMPLEFORMAT_COMPLEXINT;
+  TIFFClose(tif);
+  return undecodable;
 }
 
 std::vector<Bytes> tiff_candidates(ByteView input, const Options& options) {

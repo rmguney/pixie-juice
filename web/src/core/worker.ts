@@ -1,6 +1,6 @@
 // Web Worker hosting the engine, so processing never blocks the page.
 
-import { Engine } from './engine';
+import { Engine, EngineError } from './engine';
 import type { Request, Response } from './protocol';
 
 const engine = Engine.create();
@@ -24,8 +24,9 @@ self.onmessage = async (event: MessageEvent<Request>) => {
     response = {
       id,
       error: error instanceof Error ? error.message : String(error),
-      // A WebAssembly trap (e.g. out of memory) leaves the module unusable.
-      fatal: error instanceof WebAssembly.RuntimeError,
+      // Anything but a reported failure (a WebAssembly trap such as running out of
+      // memory, a stack overflow through WASM frames) may leave the module unusable.
+      fatal: !(error instanceof EngineError),
     };
   }
   self.postMessage(response, { transfer: 'result' in response ? transferables(response.result) : [] });

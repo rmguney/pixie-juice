@@ -43,8 +43,9 @@ export interface DecodedMesh {
 
 export interface BuildInfo {
   version: string;
-  commit: string;
   timestamp: string;
+  /** SHA-256 of the core sources the module was built from (core/cmake/SourceHash.cmake) */
+  source: string;
 }
 
 /** The Pixie Juice engine, running in a Web Worker. */

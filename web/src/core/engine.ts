@@ -27,19 +27,30 @@ interface NativeMesh {
   error?: string;
 }
 
+/**
+ * A failure the engine reports about the input. Anything else thrown while
+ * running it (a WebAssembly trap, a stack overflow through WASM frames) may
+ * leave the module broken, and the worker restarts it.
+ */
+export class EngineError extends Error {}
+
 function unwrap(result: NativeResult): CoreResult {
   if (result.error !== undefined || !result.data || !result.format) {
-    throw new Error(result.error ?? 'Processing failed');
+    throw new EngineError(result.error ?? 'Processing failed');
   }
   return { data: result.data, format: result.format, changed: Boolean(result.changed) };
 }
 
-/** Text of an SVG in the encoding its XML declaration names (UTF-8 otherwise). */
+/** Text of an SVG: by its byte order mark, else the encoding its XML declaration names, else UTF-8. */
 function decodeSvg(data: Uint8Array): string {
+  if (data[0] === 0xff && data[1] === 0xfe) return new TextDecoder('utf-16le').decode(data);
+  if (data[0] === 0xfe && data[1] === 0xff) return new TextDecoder('utf-16be').decode(data);
   const declaration = new TextDecoder('latin1').decode(data.subarray(0, 200));
-  const encoding = /^\s*<\?xml[^>]*encoding=["']([\w.:-]+)["']/i.exec(declaration)?.[1];
+  const declared = /^\s*<\?xml[^>]*encoding=["']([\w.:-]+)["']/i.exec(declaration)?.[1];
+  // A declaration readable as ASCII can't be UTF-16 or UTF-32 text (that would be full of zero bytes).
+  const encoding = declared && !/^utf-?(16|32)/i.test(declared) ? declared : 'utf-8';
   try {
-    return new TextDecoder(encoding ?? 'utf-8').decode(data);
+    return new TextDecoder(encoding).decode(data);
   } catch {
     return new TextDecoder('utf-8').decode(data); // an encoding the browser doesn't know
   }
@@ -60,7 +71,12 @@ async function optimizeSvgFile(data: Uint8Array, options: CoreOptions): Promise<
   const plugins = options.lossless
     ? LOSSLESS_SVG_PLUGINS.filter((name) => !keep.includes(name))
     : [{ name: 'preset-default' as const, params: { overrides: Object.fromEntries(keep.map((name) => [name, false])) } }];
-  const { data: svg } = optimize(decodeSvg(data), { multipass: true, plugins });
+  let svg: string;
+  try {
+    svg = optimize(decodeSvg(data), { multipass: true, plugins }).data;
+  } catch (error) {
+    throw new EngineError(`SVG could not be parsed: ${error instanceof Error ? error.message : String(error)}`);
+  }
   const encoded = new TextEncoder().encode(svg);
   return encoded.length < data.length
     ? { data: encoded, format: 'svg', changed: true }
@@ -78,8 +94,8 @@ export class Engine {
   info(): BuildInfo {
     return {
       version: this.native.version(),
-      commit: this.native.buildCommit(),
       timestamp: this.native.buildTimestamp(),
+      source: this.native.buildSource(),
     };
   }
 
@@ -88,21 +104,21 @@ export class Engine {
   }
 
   async optimize(data: Uint8Array, options: CoreOptions = {}): Promise<CoreResult> {
-    if (data.length === 0) throw new Error('Input is empty');
+    if (data.length === 0) throw new EngineError('Input is empty');
     const result = unwrap(this.native.optimize(data, options) as NativeResult);
     // The core recognises SVG and leaves it to SVGO.
     return result.format === 'svg' ? optimizeSvgFile(data, options) : result;
   }
 
   convert(data: Uint8Array, target: ConvertTarget, options: CoreOptions = {}): CoreResult {
-    if (data.length === 0) throw new Error('Input is empty');
+    if (data.length === 0) throw new EngineError('Input is empty');
     return unwrap(this.native.convert(data, target, options) as NativeResult);
   }
 
   decodeImage(data: Uint8Array): DecodedImage {
     const result = this.native.decodeImage(data) as NativeImage;
     if (result.error !== undefined || !result.rgba || !result.width || !result.height) {
-      throw new Error(result.error ?? 'Decode failed');
+      throw new EngineError(result.error ?? 'Decode failed');
     }
     return {
       width: result.width,
@@ -113,7 +129,7 @@ export class Engine {
 
   decodeMesh(data: Uint8Array): DecodedMesh {
     const { positions, normals, colors, indices, error } = this.native.decodeMesh(data) as NativeMesh;
-    if (error !== undefined || !positions || !indices) throw new Error(error ?? 'Decode failed');
+    if (error !== undefined || !positions || !indices) throw new EngineError(error ?? 'Decode failed');
     return { positions, normals, colors, indices };
   }
 }

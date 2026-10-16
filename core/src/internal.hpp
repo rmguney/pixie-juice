@@ -47,6 +47,13 @@ Result<Image> decode_png(ByteView data);
 Result<Image> decode_jpeg(ByteView data);
 Result<Image> decode_ico(ByteView data);
 Result<Image> decode_tiff(ByteView data);
+/// The first frame on a transparent screen.
+Result<Image> decode_gif(ByteView data);
+/// Inflating the PNG's image data and compressed chunks stays within what its header allows.
+bool png_within_limits(ByteView data);
+/// A TIFF libtiff opens but can't decode here (a codec not built in, floating-point samples):
+/// optimizing passes it through.
+bool tiff_passes_through(ByteView data);
 
 /// What an image needs beyond its pixels to display correctly.
 struct ColourInfo {
@@ -63,6 +70,8 @@ Bytes minimal_exif(int orientation);
 void apply_orientation(Image& image, int orientation);
 /// Converts pixels from an RGB ICC profile to sRGB; false if the profile can't be used.
 bool convert_to_srgb(Image& image, ByteView icc);
+/// The profile's colour space from its header: "RGB ", "GRAY", "CMYK"...; empty without one.
+std::string_view icc_colour_space(ByteView icc);
 
 /// The input facts every candidate is checked against, computed once.
 struct Reference {
@@ -77,7 +86,8 @@ double allowed_error(const Options& options);
 /// Mean absolute difference over RGB (weighted by opacity) plus alpha.
 double mean_error(const Image& a, const Image& b);
 /// `output` decodes as `output_format`, has the input's size, keeps alpha
-/// and colour when the input had them, and is within `budget` of the input.
+/// and colour when the input had them, is within `budget` of the input on
+/// average, and within 4 x `budget` over every 8x8 block.
 bool is_faithful(const Reference& input, ByteView output, Format output_format, double budget);
 
 // Candidate generators: each returns zero or more encodings of the input, all
@@ -173,6 +183,8 @@ Bytes write_stl(const Mesh& mesh, const StlInfo& info);
 
 struct PlyInfo {
   bool binary = false;
+  /// Header comment and obj_info lines, kept: some carry meaning (comment TextureFile).
+  std::vector<std::string> comments;
   bool color_uchar = true;
   std::array<std::string, 2> uv_names{"s", "t"};
   std::array<std::string, 3> color_names{"red", "green", "blue"};
@@ -181,6 +193,7 @@ Result<ReadMesh> read_ply(ByteView data, MeshUse use, PlyInfo* info);
 Bytes write_ply(const Mesh& mesh, const PlyInfo& info);
 
 /// glTF/GLB through gltfpack; output is always GLB.
-Result<Bytes> optimize_gltf(ByteView data, Format format, const Options& options);
+/// nullopt: a file gltfpack can't carry over faithfully (Draco, other extensions), passed through.
+Result<std::optional<Bytes>> optimize_gltf(ByteView data, Format format, const Options& options);
 
 }  // namespace pixie::detail

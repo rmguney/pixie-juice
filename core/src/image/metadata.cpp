@@ -164,13 +164,18 @@ void apply_orientation(Image& image, int orientation) {
   image.rgba = std::move(out);
 }
 
+std::string_view icc_colour_space(ByteView icc) {
+  return icc.size() >= 20 ? std::string_view(reinterpret_cast<const char*>(icc.data()) + 16, 4) : std::string_view();
+}
+
 bool convert_to_srgb(Image& image, ByteView icc) {
   if (icc.empty()) return true;
   cmsHPROFILE source = cmsOpenProfileFromMem(icc.data(), cmsUInt32Number(icc.size()));
   if (!source) return false;
   bool ok = false;
-  if (cmsGetColorSpace(source) == cmsSigRgbData) {
-    cmsHPROFILE srgb = cmsCreate_sRGBProfile();
+  const cmsColorSpaceSignature space = cmsGetColorSpace(source);
+  cmsHPROFILE srgb = cmsCreate_sRGBProfile();
+  if (space == cmsSigRgbData) {
     cmsHTRANSFORM transform = cmsCreateTransform(source, TYPE_RGBA_8, srgb, TYPE_RGBA_8, INTENT_PERCEPTUAL,
                                                  cmsFLAGS_COPY_ALPHA);
     if (transform) {
@@ -178,8 +183,19 @@ bool convert_to_srgb(Image& image, ByteView icc) {
       cmsDeleteTransform(transform);
       ok = true;
     }
-    cmsCloseProfile(srgb);
+  } else if (space == cmsSigGrayData) {
+    // The pixels are grey (decoded with R = G = B): transform that one channel, keep alpha.
+    cmsHTRANSFORM transform = cmsCreateTransform(source, TYPE_GRAY_8, srgb, TYPE_RGB_8, INTENT_PERCEPTUAL, 0);
+    if (transform) {
+      Bytes grey(image.pixel_count()), rgb(image.pixel_count() * 3);
+      for (std::size_t i = 0; i < grey.size(); ++i) grey[i] = image.rgba[i * 4];
+      cmsDoTransform(transform, grey.data(), rgb.data(), cmsUInt32Number(grey.size()));
+      cmsDeleteTransform(transform);
+      for (std::size_t i = 0; i < grey.size(); ++i) std::memcpy(&image.rgba[i * 4], &rgb[i * 3], 3);
+      ok = true;
+    }
   }
+  cmsCloseProfile(srgb);
   cmsCloseProfile(source);
   return ok;
 }

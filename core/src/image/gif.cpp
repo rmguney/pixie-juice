@@ -22,8 +22,48 @@ namespace pixie::detail {
 
 namespace {
 
-// Total frame pixels a GIF may slurp into memory.
+// Total frame pixels a GIF may slurp into memory (each frame and the screen
+// are also held to kMaxPixels).
 constexpr std::uint64_t kMaxGifPixels = 512ull * 1024 * 1024;
+
+unsigned le16(ByteView d, std::size_t at) { return unsigned(d[at] | d[at + 1] << 8); }
+
+/// Walks the block structure (without decoding LZW) so that the screen and every
+/// frame are checked against the limits before giflib allocates for them.
+/// Malformed structure is left for giflib to report.
+bool frames_within_limits(ByteView d) {
+  if (d.size() < 13) return true;
+  if (std::uint64_t(le16(d, 6)) * le16(d, 8) > kMaxPixels) return false;
+  std::size_t pos = 13;
+  if (d[10] & 0x80) pos += 3u << ((d[10] & 7) + 1);  // global colour table
+  auto skip_sub_blocks = [&] {
+    while (pos < d.size()) {
+      const std::size_t n = d[pos++];
+      if (n == 0) return;
+      pos += n;
+    }
+  };
+  std::uint64_t total = 0;
+  while (pos < d.size()) {
+    const std::uint8_t block = d[pos++];
+    if (block == 0x21) {  // extension: label, then sub-blocks
+      ++pos;
+      skip_sub_blocks();
+    } else if (block == 0x2C && pos + 9 <= d.size()) {  // image descriptor
+      const std::uint64_t pixels = std::uint64_t(le16(d, pos + 4)) * le16(d, pos + 6);
+      const std::uint8_t flags = d[pos + 8];
+      total += pixels;
+      if (pixels > kMaxPixels || total > kMaxGifPixels) return false;
+      pos += 9;
+      if (flags & 0x80) pos += 3u << ((flags & 7) + 1);  // local colour table
+      ++pos;                                              // LZW minimum code size
+      skip_sub_blocks();
+    } else {
+      return true;  // trailer, or structure giflib will reject
+    }
+  }
+  return true;
+}
 
 struct Reader {
   ByteView data;
@@ -45,6 +85,7 @@ int write_gif(GifFileType* gif, const GifByteType* buffer, int length) {
 }
 
 GifFileType* open_gif(Reader& reader) {
+  if (!frames_within_limits(reader.data)) return nullptr;
   int error = 0;
   GifFileType* gif = DGifOpen(&reader, read_gif, &error);
   if (!gif) return nullptr;
@@ -121,7 +162,82 @@ bool copy_frame(GifFileType* target, const SavedImage& from, bool keep_all_exten
   return true;
 }
 
+/// Every frame decodes the same: placement, palette colours, raster and
+/// graphics control (delay, disposal, transparency).
+bool same_frames(GifFileType* a, GifFileType* b) {
+  if (a->ImageCount != b->ImageCount || a->SWidth != b->SWidth || a->SHeight != b->SHeight) return false;
+  auto colours = [](const ColorMapObject* map) {
+    return map ? std::vector<GifColorType>(map->Colors, map->Colors + map->ColorCount) : std::vector<GifColorType>();
+  };
+  auto same_colours = [&](const ColorMapObject* x, const ColorMapObject* y) {
+    const auto cx = colours(x), cy = colours(y);
+    return cx.size() == cy.size() && std::equal(cx.begin(), cx.end(), cy.begin(), [](const GifColorType& p, const GifColorType& q) {
+             return p.Red == q.Red && p.Green == q.Green && p.Blue == q.Blue;
+           });
+  };
+  if (!same_colours(a->SColorMap, b->SColorMap)) return false;
+  for (int i = 0; i < a->ImageCount; ++i) {
+    const GifImageDesc& x = a->SavedImages[i].ImageDesc;
+    const GifImageDesc& y = b->SavedImages[i].ImageDesc;
+    if (x.Left != y.Left || x.Top != y.Top || x.Width != y.Width || x.Height != y.Height ||
+        !same_colours(x.ColorMap, y.ColorMap) ||
+        std::memcmp(a->SavedImages[i].RasterBits, b->SavedImages[i].RasterBits, std::size_t(x.Width) * x.Height) != 0) {
+      return false;
+    }
+    GraphicsControlBlock gx{}, gy{};
+    gx.TransparentColor = gy.TransparentColor = NO_TRANSPARENT_COLOR;
+    DGifSavedExtensionToGCB(a, i, &gx);
+    DGifSavedExtensionToGCB(b, i, &gy);
+    if (gx.DisposalMode != gy.DisposalMode || gx.DelayTime != gy.DelayTime || gx.TransparentColor != gy.TransparentColor) {
+      return false;
+    }
+  }
+  return true;
+}
+
 }  // namespace
+
+Result<Image> decode_gif(ByteView data) {
+  Reader reader{data};
+  GifFileType* gif = open_gif(reader);
+  if (!gif) return fail("Not a valid GIF");
+  const SavedImage& frame = gif->SavedImages[0];
+  const GifImageDesc& desc = frame.ImageDesc;
+  const ColorMapObject* map = desc.ColorMap ? desc.ColorMap : gif->SColorMap;
+  GraphicsControlBlock control{};
+  control.TransparentColor = NO_TRANSPARENT_COLOR;
+  DGifSavedExtensionToGCB(gif, 0, &control);
+
+  Image image;
+  // A zero screen size means the first frame's extent.
+  image.width = gif->SWidth ? std::uint32_t(gif->SWidth) : std::uint32_t(desc.Left + desc.Width);
+  image.height = gif->SHeight ? std::uint32_t(gif->SHeight) : std::uint32_t(desc.Top + desc.Height);
+  Result<Image> result = fail("GIF dimensions too large");
+  if (image.width && image.height && std::uint64_t(image.width) * image.height <= kMaxPixels) {
+    // Pixels the first frame doesn't cover stay transparent, as browsers show them
+    // (they ignore the background colour).
+    image.rgba.assign(image.pixel_count() * 4, 0);
+    for (int y = 0; y < desc.Height; ++y) {
+      for (int x = 0; x < desc.Width; ++x) {
+        const std::uint32_t cx = std::uint32_t(desc.Left + x), cy = std::uint32_t(desc.Top + y);
+        const int index = frame.RasterBits[std::size_t(y) * desc.Width + x];
+        if (cx >= image.width || cy >= image.height || index == control.TransparentColor || !map ||
+            index >= map->ColorCount) {
+          continue;
+        }
+        std::uint8_t* pixel = &image.rgba[(std::size_t(cy) * image.width + cx) * 4];
+        pixel[0] = map->Colors[index].Red;
+        pixel[1] = map->Colors[index].Green;
+        pixel[2] = map->Colors[index].Blue;
+        pixel[3] = 255;
+      }
+    }
+    result = std::move(image);
+  }
+  int error = 0;
+  DGifCloseFile(gif, &error);
+  return result;
+}
 
 std::vector<Bytes> gif_candidates(ByteView input, const Options& options) {
   std::vector<Bytes> candidates;
@@ -155,13 +271,20 @@ std::vector<Bytes> gif_candidates(ByteView input, const Options& options) {
                            unsigned(block.ByteCount), block.Bytes);
     }
   }
-  DGifCloseFile(source, &error);
-
   if (!ok) {
     discard(target);
+    DGifCloseFile(source, &error);
     return candidates;
   }
-  if (EGifSpew(target, &error) == GIF_OK) candidates.push_back(std::move(out));
+  // The first frame is checked by pixels like any image; this checks them all.
+  if (EGifSpew(target, &error) == GIF_OK) {
+    Reader written{out};
+    if (GifFileType* reread = open_gif(written)) {
+      if (same_frames(source, reread)) candidates.push_back(std::move(out));
+      DGifCloseFile(reread, &error);
+    }
+  }
+  DGifCloseFile(source, &error);
   return candidates;
 }
 

@@ -137,34 +137,44 @@ struct ObjScan {
   bool exact = true;
   /// Every "v" line carries an RGB colour after the position.
   bool colors = false;
+  /// A comment after a statement or a "\" line continuation, which fast_obj misreads.
+  bool needs_cleaning = false;
   /// Faces that come before the first "usemtl" (they have no material).
   std::size_t faces_without_material = 0;
 };
 
+/// The statement's keyword and the rest of the line; fast_obj accepts tabs as well as spaces after it.
+std::pair<std::string_view, std::string_view> split_keyword(std::string_view line) {
+  const auto end = std::min(line.find_first_of(" \t"), line.size());
+  return {line.substr(0, end), trim(line.substr(end))};
+}
+
 ObjScan scan_obj(std::string_view text) {
-  static constexpr std::array kUnsupported{"l ", "p ", "vp ", "curv", "surf", "cstype", "deg ", "bmat", "step ",
-                                           "parm ", "trim ", "hole ", "scrv ", "sp ", "end", "con ", "mg ",
-                                           "lod ", "usemap", "maplib", "shadow_obj", "trace_obj", "ctech",
-                                           "stech", "bevel", "c_interp", "d_interp"};
+  // Statements the writer doesn't reproduce: free-form geometry, points, lines, display attributes.
+  static constexpr std::array<std::string_view, 29> kUnsupported{
+      "l", "p", "vp", "curv", "curv2", "surf", "cstype", "deg", "bmat", "step", "parm", "trim", "hole", "scrv", "sp",
+      "end", "con", "mg", "lod", "usemap", "maplib", "shadow_obj", "trace_obj", "ctech", "stech", "bevel", "c_interp",
+      "d_interp", "res"};
   ObjScan scan;
   int objects = 0, position_width = 0;
   bool has_normals = false, smoothing = false, material_seen = false, mixed_widths = false;
   for_each_line(text, [&](std::string_view raw) {
-    const auto line = trim(raw.substr(0, raw.find('#')));
+    const auto comment = raw.find('#');
+    const auto line = trim(raw.substr(0, comment));
     if (line.empty()) return;
-    for (const char* prefix : kUnsupported) {
-      if (line.starts_with(prefix)) scan.exact = false;
-    }
-    if (line.starts_with("o ") || line.starts_with("g ")) ++objects;
-    if (line.starts_with("vn ")) has_normals = true;
-    if (line.starts_with("s ") && line != "s off" && line != "s 0") smoothing = true;
-    if (line.starts_with("usemtl ")) material_seen = true;
-    if (line.starts_with("f ") && !material_seen) ++scan.faces_without_material;
-    if (line.starts_with("v ")) {
+    if (comment != std::string_view::npos || line.back() == '\\') scan.needs_cleaning = true;
+    const auto [keyword, rest] = split_keyword(line);
+    if (std::find(kUnsupported.begin(), kUnsupported.end(), keyword) != kUnsupported.end()) scan.exact = false;
+    if (keyword == "o" || keyword == "g") ++objects;
+    if (keyword == "vn") has_normals = true;
+    if (keyword == "s" && rest != "off" && rest != "0") smoothing = true;
+    if (keyword == "usemtl") material_seen = true;
+    if (keyword == "f" && !material_seen) ++scan.faces_without_material;
+    if (keyword == "v") {
       // xyz, or xyz plus RGB; a "w" weight or anything else isn't reproduced.
       int values = 0;
-      for (auto rest = trim(line.substr(2)); !rest.empty(); ++values) {
-        rest = trim(rest.substr(std::min(rest.find_first_of(" \t"), rest.size())));
+      for (auto remaining = rest; !remaining.empty(); ++values) {
+        remaining = trim(remaining.substr(std::min(remaining.find_first_of(" \t"), remaining.size())));
       }
       if ((values != 3 && values != 6) || (position_width != 0 && values != position_width)) {
         scan.exact = false;
@@ -177,6 +187,63 @@ ObjScan scan_obj(std::string_view text) {
   if (objects > 1 || (smoothing && !has_normals)) scan.exact = false;
   scan.colors = position_width == 6 && !mixed_widths;
   return scan;
+}
+
+/// The OBJ text with comments cut and "\" continuations joined. fast_obj stops
+/// a face at either and keeps the corners it read without the face that owns
+/// them, which shifts every later triangle.
+std::string clean_obj(std::string_view text) {
+  std::string out;
+  out.reserve(text.size());
+  for_each_line(text, [&](std::string_view raw) {
+    auto line = raw.substr(0, raw.find('#'));
+    while (!line.empty() && (line.back() == ' ' || line.back() == '\t')) line.remove_suffix(1);
+    if (!line.empty() && line.back() == '\\') {
+      line.remove_suffix(1);
+      out.append(line);
+      out.push_back(' ');  // joined with the next line
+      return;
+    }
+    out.append(line);
+    out.push_back('\n');
+  });
+  return out;
+}
+
+/// Bytes the smallest possible row of an element takes, so a declared row
+/// count can be checked against the file before miniply allocates for it.
+std::uint64_t min_row_size(const miniply::PLYElement& element, bool binary) {
+  using miniply::PLYPropertyType;
+  auto size = [](PLYPropertyType type) -> std::uint64_t {
+    switch (type) {
+      case PLYPropertyType::Char: case PLYPropertyType::UChar: return 1;
+      case PLYPropertyType::Short: case PLYPropertyType::UShort: return 2;
+      case PLYPropertyType::Int: case PLYPropertyType::UInt: case PLYPropertyType::Float: return 4;
+      case PLYPropertyType::Double: return 8;
+      case PLYPropertyType::None: break;
+    }
+    return 0;
+  };
+  std::uint64_t bytes = 0;
+  for (const auto& property : element.properties) {
+    // ASCII: at least one digit and a separator per value; binary: a list's count, or the value.
+    bytes += binary ? size(property.countType != PLYPropertyType::None ? property.countType : property.type) : 2;
+  }
+  return std::max<std::uint64_t>(bytes, 1);
+}
+
+/// "comment" and "obj_info" header lines (such as "comment TextureFile wood.png"),
+/// carried into the rewritten header. Our own marker is left out, as the writer adds it.
+std::vector<std::string> ply_comments(ByteView data) {
+  std::vector<std::string> comments;
+  const auto text = as_text(data);
+  for_each_line(text.substr(0, text.find("end_header")), [&](std::string_view raw) {
+    const auto line = trim(raw);
+    if ((line.starts_with("comment ") || line.starts_with("obj_info ")) && line != "comment Optimized by Pixie Juice") {
+      comments.emplace_back(line);
+    }
+  });
+  return comments;
 }
 
 /// A read in progress. inexact() marks it and says whether to stop reading.
@@ -267,16 +334,32 @@ std::string obj_header(ByteView source) {
 
 Result<ReadMesh> read_obj(ByteView data, MeshUse use) {
   Reading reading{use};
-  const ObjScan scan = scan_obj(as_text(data));
+  std::string_view text = as_text(data);
+  ObjScan scan = scan_obj(text);
+  std::string cleaned;
+  if (scan.needs_cleaning) {
+    cleaned = clean_obj(text);
+    text = cleaned;
+    scan = scan_obj(text);
+  }
   if (!scan.exact && reading.inexact()) return std::move(reading.read);
 
-  MemoryObj file{data};
+  MemoryObj file{ByteView(reinterpret_cast<const std::uint8_t*>(text.data()), text.size())};
   const fastObjCallbacks callbacks{obj_open, obj_close, obj_read, obj_size};
   const std::unique_ptr<fastObjMesh, decltype(&fast_obj_destroy)> owner(
       fast_obj_read_with_callbacks("model.obj", &callbacks, &file), fast_obj_destroy);
   const fastObjMesh* obj = owner.get();
   if (!obj) return fail("OBJ parse failed");
   if (obj->face_count == 0) return reading.finish();  // a point cloud: no triangles
+
+  // An index 0 (invalid OBJ) still stops fast_obj mid-face: every corner must belong to a face.
+  std::size_t corners = 0;
+  for (unsigned f = 0; f < obj->face_count; ++f) corners += obj->face_vertices[f];
+  if (corners != obj->index_count) {
+    if (use == MeshUse::Display) return fail("OBJ face with a vertex index of 0");
+    reading.inexact();
+    return std::move(reading.read);
+  }
 
   // fast_obj doesn't range-check face references; index 0 is its "missing" slot.
   unsigned with_uv = 0, with_normal = 0;
@@ -309,8 +392,11 @@ Result<ReadMesh> read_obj(ByteView data, MeshUse use) {
   std::size_t base = 0;
   for (unsigned f = 0; f < obj->face_count; ++f) {
     const unsigned count = obj->face_vertices[f];
-    if (base + count > obj->index_count || (grouped && obj->face_materials[f] >= obj->material_count)) {
-      return fail("Inconsistent OBJ face data");
+    if (grouped && obj->face_materials[f] >= obj->material_count) return fail("Inconsistent OBJ face data");
+    // Polylines ("l") have no surface; files with them are already inexact, and display skips them.
+    if (obj->face_lines && obj->face_lines[f]) {
+      base += count;
+      continue;
     }
     for (unsigned k = 1; k + 1 < count; ++k) {
       for (const std::size_t corner : {base, base + k, base + k + 1}) {
@@ -409,7 +495,12 @@ Result<ReadMesh> read_stl(ByteView data, MeshUse use, StlInfo* info) {
   Mesh& mesh = reading.read.mesh;
   std::uint32_t declared = 0;
   if (data.size() >= 84) std::memcpy(&declared, data.data() + 80, 4);
-  const bool binary = data.size() >= 84 && data.size() == 84 + std::uint64_t(declared) * 50;
+  // Binary when the size matches the declared triangle count, or when the file
+  // isn't ASCII STL and its size fits whole records (some exporters write a wrong count).
+  const auto text = trim(as_text(data.first(std::min<std::size_t>(data.size(), 1024))));
+  const bool ascii = text.starts_with("solid") && text.find("facet") != std::string_view::npos;
+  const bool binary = data.size() >= 84 && (data.size() == 84 + std::uint64_t(declared) * 50 ||
+                                            (!ascii && data.size() > 84 && (data.size() - 84) % 50 == 0));
   if (info) info->binary = binary;
   if (binary) {
     const std::size_t triangles = (data.size() - 84) / 50;
@@ -423,8 +514,10 @@ Result<ReadMesh> read_stl(ByteView data, MeshUse use, StlInfo* info) {
   } else {
     bool first = true;
     bool ok = true;
+    int solids = 0;
     for_each_line(as_text(data), [&](std::string_view raw) {
       const auto line = trim(raw);
+      if (line.starts_with("solid")) ++solids;
       if (first && line.starts_with("solid")) {
         if (info) info->name = std::string(trim(line.substr(5)));
         first = false;
@@ -445,6 +538,8 @@ Result<ReadMesh> read_stl(ByteView data, MeshUse use, StlInfo* info) {
       }
     });
     if (!ok || mesh.positions.size() % 9 != 0) return fail("Invalid ASCII STL");
+    // The writer emits one solid; several would be merged under the first name.
+    if (solids > 1 && reading.inexact()) return std::move(reading.read);
   }
   mesh.indices.resize(mesh.vertex_count());
   for (std::size_t i = 0; i < mesh.indices.size(); ++i) mesh.indices[i] = std::uint32_t(i);
@@ -499,7 +594,11 @@ Result<ReadMesh> read_ply(ByteView data, MeshUse use, PlyInfo* info) {
   if (!file.write(data)) return fail("Could not stage PLY input");
   miniply::PLYReader reader(file.path().c_str());
   if (!reader.valid()) return fail("Invalid PLY");
-  if (info) info->binary = reader.file_type() != miniply::PLYFileType::ASCII;
+  const bool binary = reader.file_type() != miniply::PLYFileType::ASCII;
+  if (info) {
+    info->binary = binary;
+    info->comments = ply_comments(data);
+  }
 
   using miniply::PLYPropertyType;
   Reading reading{use};
@@ -507,6 +606,10 @@ Result<ReadMesh> read_ply(ByteView data, MeshUse use, PlyInfo* info) {
   bool vertices_read = false, faces_read = false;
   for (; reader.has_element(); reader.next_element()) {
     const auto* element = reader.element();
+    // miniply allocates the whole element up front: its declared rows must fit in the file.
+    if (std::uint64_t(element->count) * min_row_size(*element, binary) > data.size()) {
+      return fail("PLY declares more data than the file holds");
+    }
     if (reader.element_is(miniply::kPLYVertexElement) && !vertices_read) {
       if (!reader.load_element()) return fail("Invalid PLY vertex data");
       const std::uint32_t rows = reader.num_rows();
@@ -519,6 +622,17 @@ Result<ReadMesh> read_ply(ByteView data, MeshUse use, PlyInfo* info) {
         }
         return true;
       };
+      // miniply extracts list properties as if they were scalars, reading past its row buffer.
+      auto scalar = [&](const std::uint32_t* idx, int n) {
+        for (int i = 0; i < n; ++i) {
+          if (element->properties[idx[i]].countType != PLYPropertyType::None) return false;
+        }
+        return true;
+      };
+      if (!scalar(pos, 3) || (reader.find_normal(nrm) && !scalar(nrm, 3)) ||
+          (reader.find_texcoord(uv) && !scalar(uv, 2)) || (reader.find_color(col) && !scalar(col, 3))) {
+        return fail("PLY vertex attributes declared as lists");
+      }
       // Doubles would lose precision in the float writer.
       if (!all_float(pos, 3) && reading.inexact()) return std::move(reading.read);
       mesh.positions.resize(std::size_t(rows) * 3);
@@ -572,6 +686,8 @@ Result<ReadMesh> read_ply(ByteView data, MeshUse use, PlyInfo* info) {
       const std::uint32_t faces = reader.num_rows();
       const std::uint32_t* counts = reader.get_list_counts(idx[0]);
       std::vector<std::uint32_t> corners(reader.sum_of_list_counts(idx[0]));
+      faces_read = true;
+      if (corners.empty()) continue;  // no faces (and nothing to extract into)
       if (!counts || !reader.extract_list_property(idx[0], PLYPropertyType::UInt, corners.data())) {
         return fail("Invalid PLY faces");
       }
@@ -587,7 +703,6 @@ Result<ReadMesh> read_ply(ByteView data, MeshUse use, PlyInfo* info) {
       for (auto i : mesh.indices) {
         if (i >= mesh.vertex_count()) return fail("PLY face index out of range");
       }
-      faces_read = true;
     } else if (reading.inexact()) {  // edges, materials, extra elements: not reproduced
       return std::move(reading.read);
     }
@@ -598,6 +713,10 @@ Result<ReadMesh> read_ply(ByteView data, MeshUse use, PlyInfo* info) {
 Bytes write_ply(const Mesh& mesh, const PlyInfo& info) {
   std::string header = "ply\nformat ";
   header += info.binary ? "binary_little_endian 1.0\n" : "ascii 1.0\n";
+  for (const auto& comment : info.comments) {
+    header += comment;
+    header.push_back('\n');
+  }
   header += "comment Optimized by Pixie Juice\nelement vertex ";
   append_uint(header, mesh.vertex_count());
   header += "\nproperty float x\nproperty float y\nproperty float z\n";

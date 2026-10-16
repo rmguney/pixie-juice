@@ -10,8 +10,8 @@ interface EmbindModule {
   decodeImage(_0: any): any;
   decodeMesh(_0: any): any;
   version(): string;
-  buildCommit(): string;
   buildTimestamp(): string;
+  buildSource(): string;
 }
 
 export type MainModule = WasmModule & EmbindModule;

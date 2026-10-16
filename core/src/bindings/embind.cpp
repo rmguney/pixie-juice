@@ -100,8 +100,8 @@ std::string detect(const val& data) {
 }
 
 std::string version() { return pixie::build::version; }
-std::string build_commit() { return pixie::build::commit; }
 std::string build_timestamp() { return pixie::build::timestamp; }
+std::string build_source() { return pixie::build::source; }
 
 }  // namespace
 
@@ -112,6 +112,6 @@ EMSCRIPTEN_BINDINGS(pixie_core) {
   emscripten::function("decodeImage", &decode_image);
   emscripten::function("decodeMesh", &decode_mesh);
   emscripten::function("version", &version);
-  emscripten::function("buildCommit", &build_commit);
   emscripten::function("buildTimestamp", &build_timestamp);
+  emscripten::function("buildSource", &build_source);
 }

@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <cctype>
 #include <cmath>
+#include <string_view>
 
 namespace pixie {
 
@@ -51,8 +53,12 @@ Result<Output> optimize_image(ByteView input, Format format, const Options& opti
   if (format == Format::Svg) return unchanged(format);
 
   auto image = decode_rgba(input, format);
-  if (!image) return std::unexpected(image.error());
+  if (!image) {
+    if (format == Format::Tiff && tiff_passes_through(input)) return unchanged(format);
+    return std::unexpected(image.error());
+  }
   const Reference reference{*image, image->has_alpha(), image->is_gray()};
+  const ColourInfo colour = read_colour_info(input, format);
 
   const double budget = allowed_error(options);
   Output best = unchanged(format);
@@ -60,6 +66,10 @@ Result<Output> optimize_image(ByteView input, Format format, const Options& opti
   for (auto& candidate : image_candidates(input, format, *image, options)) {
     if (candidate.size() >= best_size) continue;
     const Format candidate_format = detect(candidate);
+    // Pixels are compared in stored orientation and colour, so what displays
+    // them (orientation, colour profile) must survive too.
+    const ColourInfo kept = read_colour_info(candidate, candidate_format);
+    if (kept.orientation != colour.orientation || kept.icc.empty() != colour.icc.empty()) continue;
     if (is_faithful(reference, candidate, candidate_format, budget)) {
       best_size = candidate.size();
       best = Output{std::move(candidate), candidate_format, true};
@@ -78,18 +88,35 @@ Result<ReadMesh> read_mesh(ByteView input, Format format, MeshUse use, StlInfo* 
   }
 }
 
-/// The same triangles in any order and rotation, compared by exact bit patterns.
+/// The same triangles in any order and rotation: each corner's position,
+/// normal, UV and colour, and each triangle's material group, compared by
+/// exact bit patterns.
 bool same_geometry(const Mesh& a, const Mesh& b) {
-  if (a.triangle_count() != b.triangle_count()) return false;
-  using Triangle = std::array<std::array<std::uint32_t, 3>, 3>;
+  if (a.triangle_count() != b.triangle_count() || a.normals.empty() != b.normals.empty() ||
+      a.uvs.empty() != b.uvs.empty() || a.colors.empty() != b.colors.empty() ||
+      a.triangle_groups.empty() != b.triangle_groups.empty()) {
+    return false;
+  }
+  using Corner = std::array<std::uint32_t, 11>;  // position xyz, normal xyz, uv, rgb
+  using Triangle = std::pair<std::string_view, std::array<Corner, 3>>;  // material group, corners
   auto triangles = [](const Mesh& m) {
+    auto copy = [](const std::vector<float>& values, std::size_t vertex, std::size_t n, Corner& corner,
+                   std::size_t at) {
+      if (values.empty()) return;
+      for (std::size_t i = 0; i < n; ++i) corner[at + i] = std::bit_cast<std::uint32_t>(values[vertex * n + i]);
+    };
     std::vector<Triangle> out(m.triangle_count());
     for (std::size_t t = 0; t < out.size(); ++t) {
+      auto& [group, corners] = out[t];
+      if (!m.triangle_groups.empty()) group = m.group_names[m.triangle_groups[t]];
       for (std::size_t k = 0; k < 3; ++k) {
         const std::size_t v = m.indices[t * 3 + k];
-        for (std::size_t c = 0; c < 3; ++c) out[t][k][c] = std::bit_cast<std::uint32_t>(m.positions[v * 3 + c]);
+        copy(m.positions, v, 3, corners[k], 0);
+        copy(m.normals, v, 3, corners[k], 3);
+        copy(m.uvs, v, 2, corners[k], 6);
+        copy(m.colors, v, 3, corners[k], 8);
       }
-      std::rotate(out[t].begin(), std::min_element(out[t].begin(), out[t].end()), out[t].end());
+      std::rotate(corners.begin(), std::min_element(corners.begin(), corners.end()), corners.end());
     }
     std::sort(out.begin(), out.end());
     return out;
@@ -102,8 +129,8 @@ Result<Output> optimize_mesh_file(ByteView input, Format format, const Options& 
     auto packed = optimize_gltf(input, format, options);
     if (!packed) return std::unexpected(packed.error());
     // gltfpack restructures the file, so it is accepted on size; it keeps every primitive.
-    if (packed->size() >= input.size()) return unchanged(format);
-    return Output{std::move(*packed), Format::Glb, true};
+    if (!*packed || (*packed)->size() >= input.size()) return unchanged(format);
+    return Output{std::move(**packed), Format::Glb, true};
   }
 
   if (format == Format::Fbx) return unchanged(format);  // detection only
@@ -154,9 +181,13 @@ Result<Output> convert(ByteView input, Format target, const Options& options) {
   if (!image) return std::unexpected(image.error());
   ColourInfo colour = read_colour_info(input, source);
   apply_orientation(*image, colour.orientation);
-  // Formats without ICC support get sRGB pixels instead of a profile.
-  const bool embeds_icc = target == Format::Png || target == Format::Jpeg || target == Format::WebP ||
-                          target == Format::Tiff;
+  // Only an RGB profile describes the decoded RGB pixels, and only PNG, JPEG,
+  // WebP and TIFF can carry it. Otherwise the profile is applied to the pixels
+  // (RGB and grey profiles); a CMYK profile no longer fits pixels already
+  // turned into RGB, so it is dropped with them left as decoded.
+  const bool embeds_icc = icc_colour_space(colour.icc) == "RGB " &&
+                          (target == Format::Png || target == Format::Jpeg || target == Format::WebP ||
+                           target == Format::Tiff);
   if (!embeds_icc && !colour.icc.empty()) {
     convert_to_srgb(*image, colour.icc);
     colour.icc.clear();
@@ -177,6 +208,14 @@ Result<Output> convert(ByteView input, Format target, const Options& options) {
     default: break;
   }
   if (!encoded) return std::unexpected(encoded.error());
+  // Lossless: the output must decode to exactly the pixels encoded. JPEG never
+  // does; GIF only with up to 256 colours; ICO only up to 256 pixels across.
+  if (settings.lossless &&
+      !is_faithful(Reference{*image, image->has_alpha(), image->is_gray()}, *encoded, target, 0.0)) {
+    std::string name(format_name(target));
+    std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return char(std::toupper(c)); });
+    return fail(name + " can't hold this image losslessly; turn off Lossless or choose PNG, WebP or TIFF");
+  }
   return Output{std::move(*encoded), target, true};
 }
 

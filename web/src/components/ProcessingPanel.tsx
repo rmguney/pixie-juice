@@ -1,9 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
-import type { ConvertTarget, CoreOptions } from '../core/types';
-import type { ProcessingPanelProps, ProcessedResult } from '../types';
-import { fileKind } from '../utils/files';
-
-type OutputChoice = 'auto' | ConvertTarget;
+import type { CoreOptions } from '../core/types';
+import type { OutputChoice, ProcessingPanelProps, ProcessedResult } from '../types';
+import { extensionOf, fileKind } from '../utils/files';
 
 const OUTPUT_FORMATS: { value: OutputChoice; label: string; hint: string }[] = [
   { value: 'auto', label: 'Auto (keep format)', hint: "Optimizes within each file's own format; keeps the original if nothing is smaller." },
@@ -21,36 +19,41 @@ const OUTPUT_FORMATS: { value: OutputChoice; label: string; hint: string }[] = [
 const fill = (value: number, min: number, max: number) =>
   ({ '--fill': `${((value - min) / (max - min)) * 100}%` }) as React.CSSProperties;
 
-export default function ProcessingPanel({ files, api, onProcess }: ProcessingPanelProps) {
-  const [quality, setQuality] = useState(75);
-  const [meshDetail, setMeshDetail] = useState(100);
-  const [output, setOutput] = useState<OutputChoice>('auto');
-  const [preserveMetadata, setPreserveMetadata] = useState(false);
-  const [lossless, setLossless] = useState(false);
+/** Raster images can change format; meshes and SVG are optimized in their own. */
+const convertible = (name: string) => fileKind(name) === 'image' && extensionOf(name) !== 'svg';
+
+export default function ProcessingPanel({ files, api, settings, onSettingsChange, onProcess }: ProcessingPanelProps) {
+  const { quality, meshDetail, output, preserveMetadata, lossless } = settings;
+  const change = (update: Partial<typeof settings>) => onSettingsChange({ ...settings, ...update });
   // Progress of the batch being processed; the file list itself may change meanwhile.
   const [progress, setProgress] = useState<{ done: number; total: number; current: string } | null>(null);
-  // A run stops when the panel goes away (reset or all files removed).
-  const mounted = useRef(true);
+  // A run stops when the panel goes away (reset or all files removed) or the list changes.
+  const current = useRef<File[] | null>(files);
   useEffect(() => {
-    mounted.current = true;
+    current.current = files;
     return () => {
-      mounted.current = false;
+      current.current = null;
     };
-  }, []);
+  }, [files]);
 
   const hasMeshes = files.some((file) => fileKind(file.name) === 'mesh');
+  const hasOwnFormatFiles = files.some((file) => !convertible(file.name));
   const label = `Optimize ${files.length} file${files.length === 1 ? '' : 's'}`;
 
   async function processFiles() {
     const options: CoreOptions = { quality, lossless, preserveMetadata, meshRatio: meshDetail / 100 };
     const results: ProcessedResult[] = [];
     for (const [index, file] of files.entries()) {
-      if (!mounted.current) return;
+      // Its results would be discarded anyway: stop instead of processing the rest.
+      if (current.current !== files) {
+        if (current.current) setProgress(null);
+        return;
+      }
       setProgress({ done: index, total: files.length, current: file.name });
       try {
         const input = new Uint8Array(await file.arrayBuffer());
         const result =
-          output !== 'auto' && fileKind(file.name) === 'image'
+          output !== 'auto' && convertible(file.name)
             ? await api.convert(input, output, options)
             : await api.optimize(input, options);
         results.push({ file, success: true, data: result.data, format: result.format, changed: result.changed });
@@ -114,7 +117,7 @@ export default function ProcessingPanel({ files, api, onProcess }: ProcessingPan
             min="10"
             max="100"
             value={quality}
-            onChange={(e) => setQuality(Number(e.target.value))}
+            onChange={(e) => change({ quality: Number(e.target.value) })}
             className="range"
             style={fill(quality, 10, 100)}
           />
@@ -133,7 +136,7 @@ export default function ProcessingPanel({ files, api, onProcess }: ProcessingPan
               min="10"
               max="100"
               value={meshDetail}
-              onChange={(e) => setMeshDetail(Number(e.target.value))}
+              onChange={(e) => change({ meshDetail: Number(e.target.value) })}
               className="range"
               style={fill(meshDetail, 10, 100)}
             />
@@ -142,14 +145,14 @@ export default function ProcessingPanel({ files, api, onProcess }: ProcessingPan
 
         <div className="field">
           <label htmlFor="format" className="label">Output format</label>
-          <select id="format" value={output} onChange={(e) => setOutput(e.target.value as OutputChoice)} className="select">
+          <select id="format" value={output} onChange={(e) => change({ output: e.target.value as OutputChoice })} className="select">
             {OUTPUT_FORMATS.map((f) => (
               <option key={f.value} value={f.value}>{f.label}</option>
             ))}
           </select>
           <p className="hint">
             {outputHint}
-            {output !== 'auto' && hasMeshes && ' Meshes are always optimized in their own format.'}
+            {output !== 'auto' && hasOwnFormatFiles && ' Meshes and SVG are always optimized in their own format.'}
           </p>
         </div>
 
@@ -165,21 +168,21 @@ export default function ProcessingPanel({ files, api, onProcess }: ProcessingPan
             role="switch"
             className="switch"
             checked={preserveMetadata}
-            onChange={(e) => setPreserveMetadata(e.target.checked)}
+            onChange={(e) => change({ preserveMetadata: e.target.checked })}
           />
         </label>
 
         <label className="toggle">
           <span className="toggle-text">
             <span className="label">Lossless</span>
-            <span className="hint">Never change pixels or geometry.</span>
+            <span className="hint">Never change pixels or geometry; conversions to formats that can't hold the image exactly fail.</span>
           </span>
           <input
             type="checkbox"
             role="switch"
             className="switch"
             checked={lossless}
-            onChange={(e) => setLossless(e.target.checked)}
+            onChange={(e) => change({ lossless: e.target.checked })}
           />
         </label>
 

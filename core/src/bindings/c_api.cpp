@@ -9,6 +9,7 @@
 
 #include <new>
 #include <string>
+#include <utility>
 
 struct pixie_storage {
   pixie::Bytes bytes;
@@ -17,6 +18,14 @@ struct pixie_storage {
 };
 
 namespace {
+
+/// New storage holding `value` in `member`.
+template <class T>
+pixie_storage* store(T pixie_storage::*member, T value) {
+  auto* storage = new pixie_storage();
+  storage->*member = std::move(value);
+  return storage;
+}
 
 pixie::ByteView view(const std::uint8_t* data, std::size_t size) {
   return data ? pixie::ByteView(data, size) : pixie::ByteView();
@@ -40,7 +49,7 @@ Out run(Call call, Fill fill) noexcept {
     if (result) {
       fill(out, *result);
     } else {
-      out.storage = new pixie_storage{.error = std::move(result.error().message)};
+      out.storage = store(&pixie_storage::error, std::move(result.error().message));
       out.error = out.storage->error.c_str();
     }
   } catch (const std::bad_alloc&) {
@@ -55,7 +64,7 @@ Out run(Call call, Fill fill) noexcept {
 
 void fill_result(pixie_result& out, pixie::Output& output) {
   if (output.changed) {
-    out.storage = new pixie_storage{.bytes = std::move(output.data)};
+    out.storage = store(&pixie_storage::bytes, std::move(output.data));
     out.data = out.storage->bytes.data();
     out.size = out.storage->bytes.size();
   }
@@ -93,7 +102,7 @@ pixie_result pixie_convert(const std::uint8_t* data, std::size_t size, const cha
 pixie_image pixie_decode(const std::uint8_t* data, std::size_t size) {
   return run<pixie_image>([&] { return pixie::decode(view(data, size)); },
                           [](pixie_image& out, pixie::Pixels& pixels) {
-                            out.storage = new pixie_storage{.bytes = std::move(pixels.rgba)};
+                            out.storage = store(&pixie_storage::bytes, std::move(pixels.rgba));
                             out.width = pixels.width;
                             out.height = pixels.height;
                             out.rgba = out.storage->bytes.data();
@@ -103,7 +112,7 @@ pixie_image pixie_decode(const std::uint8_t* data, std::size_t size) {
 pixie_mesh pixie_decode_mesh(const std::uint8_t* data, std::size_t size) {
   return run<pixie_mesh>([&] { return pixie::decode_mesh(view(data, size)); },
                          [](pixie_mesh& out, pixie::Geometry& geometry) {
-                           out.storage = new pixie_storage{.geometry = std::move(geometry)};
+                           out.storage = store(&pixie_storage::geometry, std::move(geometry));
                            const auto& g = out.storage->geometry;
                            out.positions = g.positions.data();
                            out.normals = g.normals.empty() ? nullptr : g.normals.data();

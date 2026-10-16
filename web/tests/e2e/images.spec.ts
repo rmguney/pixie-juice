@@ -154,6 +154,18 @@ test('SVG in a declared legacy encoding keeps its text', async ({ page }) => {
   expect(text).toContain('<text>Café</text>');
 });
 
+test('SVG labelled UTF-16 but stored as UTF-8 still optimizes', async ({ page }) => {
+  const r = await page.evaluate(async () => {
+    const svg = `<?xml version="1.0" encoding="UTF-16"?>
+<!-- padding that SVGO removes -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><text>ok</text></svg>`;
+    const out = await window.pixieJuice!.optimize(new TextEncoder().encode(svg));
+    return { changed: out.changed, text: new TextDecoder().decode(out.data) };
+  });
+  expect(r.changed).toBe(true);
+  expect(r.text).toContain('<text>ok</text>');
+});
+
 test('converts to every target format', async ({ page }) => {
   const results = await page.evaluate(async () => {
     const api = window.pixieJuice!;

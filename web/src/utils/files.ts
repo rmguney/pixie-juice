@@ -29,3 +29,17 @@ export function outputName(original: string, extension: string): string {
   const base = dot < 0 ? original : original.slice(0, dot);
   return `${base}_juice.${extension}`;
 }
+
+/**
+ * Output names for a batch, unique within it: "photo.bmp" becomes
+ * "photo_bmp_juice.png" when "photo.png" also becomes "photo_juice.png".
+ */
+export function outputNames(files: { name: string; extension: string }[]): string[] {
+  const names = files.map(({ name, extension }) => outputName(name, extension));
+  return names.map((name, i) => {
+    if (names.indexOf(name) === names.lastIndexOf(name)) return name;
+    const original = files[i].name;
+    const dot = original.lastIndexOf('.');
+    return dot < 0 ? name : outputName(`${original.slice(0, dot)}_${original.slice(dot + 1)}.x`, files[i].extension);
+  });
+}

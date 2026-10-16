@@ -1,17 +1,16 @@
 import type { ResultsPanelProps, ProcessedResult } from '../types';
-import { outputName } from '../utils/files';
+import { outputNames } from '../utils/files';
 import { formatBytes, formatChange } from '../utils/format';
 import { outputFormat } from '../utils/outputFormat';
 import Icon from './Icon';
 
 type Success = Extract<ProcessedResult, { success: true }>;
 
-function download(result: Success) {
-  const { extension, mimeType } = outputFormat(result.format);
-  const url = URL.createObjectURL(new Blob([result.data as BlobPart], { type: mimeType }));
+function download(result: Success, name: string) {
+  const url = URL.createObjectURL(new Blob([result.data as BlobPart], { type: outputFormat(result.format).mimeType }));
   const link = document.createElement('a');
   link.href = url;
-  link.download = outputName(result.file.name, extension);
+  link.download = name;
   document.body.appendChild(link);
   link.click();
   link.remove();
@@ -22,9 +21,15 @@ function download(result: Success) {
 export default function ResultsPanel({ results, onReset }: ResultsPanelProps) {
   const successful = results.filter((r): r is Success => r.success);
   const failed = results.length - successful.length;
+  const names = new Map(
+    outputNames(successful.map((r) => ({ name: r.file.name, extension: outputFormat(r.format).extension }))).map(
+      (name, i) => [successful[i], name],
+    ),
+  );
 
   // Staggered: browsers drop simultaneous programmatic downloads.
-  const downloadAll = () => successful.forEach((result, index) => setTimeout(() => download(result), index * 100));
+  const downloadAll = () =>
+    successful.forEach((result, index) => setTimeout(() => download(result, names.get(result)!), index * 100));
 
   const before = successful.reduce((sum, r) => sum + r.file.size, 0);
   const after = successful.reduce((sum, r) => sum + r.data.length, 0);
@@ -81,7 +86,7 @@ export default function ResultsPanel({ results, onReset }: ResultsPanelProps) {
               <button
                 type="button"
                 className="icon-button"
-                onClick={() => download(result)}
+                onClick={() => download(result, names.get(result)!)}
                 aria-label={`Download ${result.file.name}`}
               >
                 <Icon name="download" />

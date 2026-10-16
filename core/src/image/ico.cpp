@@ -1,10 +1,12 @@
 // ICO: a directory of PNG or BMP (DIB) entries. Entries are decoded with
 // lodepng and stb_image; optimization re-encodes each entry as a lossless PNG
 // through zopflipng and keeps whichever form is smaller. Every directory field
-// is bounds-checked against the file before anything is read.
+// is bounds-checked against the file before anything is read, and entries may
+// neither overlap nor number more than kMaxEntries.
 
 #include "internal.hpp"
 
+#include <algorithm>
 #include <cstring>
 
 namespace pixie::detail {
@@ -21,10 +23,13 @@ unsigned u16(ByteView d, std::size_t at) { return unsigned(d[at] | d[at + 1] << 
 std::uint32_t u32(ByteView d, std::size_t at) { return std::uint32_t(u16(d, at) | u16(d, at + 2) << 16); }
 std::int32_t s32(ByteView d, std::size_t at) { return std::int32_t(u32(d, at)); }
 
+// Real icons hold a handful of sizes; each entry is decoded and re-encoded.
+constexpr unsigned kMaxEntries = 64;
+
 std::optional<std::vector<Entry>> parse_directory(ByteView data) {
   if (data.size() < 6 || u16(data, 0) != 0 || u16(data, 2) != 1) return std::nullopt;
   const unsigned count = u16(data, 4);
-  if (count == 0 || 6 + std::size_t(count) * 16 > data.size()) return std::nullopt;
+  if (count == 0 || count > kMaxEntries || 6 + std::size_t(count) * 16 > data.size()) return std::nullopt;
   std::vector<Entry> entries(count);
   for (unsigned i = 0; i < count; ++i) {
     const std::size_t at = 6 + std::size_t(i) * 16;
@@ -38,6 +43,13 @@ std::optional<std::vector<Entry>> parse_directory(ByteView data) {
     e.size = u32(data, at + 8);
     e.offset = u32(data, at + 12);
     if (e.size == 0 || e.offset > data.size() || e.size > data.size() - e.offset) return std::nullopt;
+  }
+  // Entries may not share bytes: overlapping ones would multiply the work on one region.
+  std::vector<std::pair<std::uint32_t, std::uint32_t>> ranges;
+  for (const auto& e : entries) ranges.emplace_back(e.offset, e.offset + e.size);
+  std::sort(ranges.begin(), ranges.end());
+  for (std::size_t i = 1; i < ranges.size(); ++i) {
+    if (ranges[i].first < ranges[i - 1].second) return std::nullopt;
   }
   return entries;
 }

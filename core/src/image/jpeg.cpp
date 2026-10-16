@@ -59,6 +59,24 @@ void init_errors(ErrorManager& manager) {
   manager.message[0] = '\0';
 }
 
+// A progressive JPEG can hold thousands of tiny refinement scans, each a pass
+// over the whole image; real encoders write well under 100.
+constexpr int kMaxScans = 256;
+
+extern "C" void on_jpeg_progress(j_common_ptr cinfo) {
+  if (cinfo->is_decompressor && reinterpret_cast<j_decompress_ptr>(cinfo)->input_scan_number > kMaxScans) {
+    auto* manager = reinterpret_cast<ErrorManager*>(cinfo->err);
+    std::snprintf(manager->message, sizeof manager->message, "more than %d scans", kMaxScans);
+    std::longjmp(manager->jump, 1);
+  }
+}
+
+/// Limits the scans a decompressor reads (see kMaxScans).
+void limit_scans(j_decompress_ptr cinfo, jpeg_progress_mgr& progress) {
+  progress.progress_monitor = on_jpeg_progress;
+  cinfo->progress = &progress;
+}
+
 /// Compressed output appended to a caller-owned buffer.
 struct Destination {
   jpeg_destination_mgr pub;
@@ -105,6 +123,8 @@ bool has_signature(const Marker& marker, int code, std::string_view signature) {
 
 constexpr auto kExif = "Exif\0\0"sv;
 constexpr auto kIcc = "ICC_PROFILE\0"sv;
+// Multi-Picture Format: further images after the main one, such as an Ultra HDR gain map.
+constexpr auto kMpf = "MPF\0"sv;
 
 /// APPn and COM segments before the first scan, or nullopt if the segment
 /// structure is malformed. Bounded by the input; never reads past it.
@@ -194,6 +214,7 @@ bool transcode(ByteView data, const std::vector<Marker>& markers, Bytes& out, st
   Destination destination;
   jpeg_decompress_struct src{};
   jpeg_compress_struct dst{};
+  jpeg_progress_mgr progress{};
   src.err = &em.pub;
   dst.err = &em.pub;
   if (setjmp(em.jump)) {
@@ -203,6 +224,7 @@ bool transcode(ByteView data, const std::vector<Marker>& markers, Bytes& out, st
     return false;
   }
   jpeg_create_decompress(&src);
+  limit_scans(&src, progress);
   jpeg_create_compress(&dst);
   jpeg_mem_src(&src, data.data(), static_cast<unsigned long>(data.size()));
   jpeg_read_header(&src, TRUE);
@@ -278,6 +300,7 @@ bool decode(ByteView data, Image& image, std::string& error) {
   ErrorManager em;
   init_errors(em);
   jpeg_decompress_struct cinfo{};
+  jpeg_progress_mgr progress{};
   cinfo.err = &em.pub;
   if (setjmp(em.jump)) {
     error = em.message;
@@ -285,6 +308,7 @@ bool decode(ByteView data, Image& image, std::string& error) {
     return false;
   }
   jpeg_create_decompress(&cinfo);
+  limit_scans(&cinfo, progress);
   jpeg_mem_src(&cinfo, data.data(), static_cast<unsigned long>(data.size()));
   jpeg_read_header(&cinfo, TRUE);
   if (std::uint64_t(cinfo.image_width) * cinfo.image_height > kMaxPixels) {
@@ -337,6 +361,11 @@ std::vector<Bytes> jpeg_candidates(ByteView input, const Image& image, const Opt
   std::vector<Bytes> candidates;
   const auto markers = read_markers(input);
   if (!markers) return candidates;
+  // Re-encoding keeps only the main image; the ones MPF points to (an Ultra HDR
+  // gain map, stereo pairs) would be lost, so such files pass through.
+  for (const auto& marker : *markers) {
+    if (has_signature(marker, 0xE2, kMpf)) return candidates;
+  }
   const auto keep = markers_to_keep(*markers, options.preserve_metadata);
   std::string error;
 

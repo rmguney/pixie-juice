@@ -16,17 +16,14 @@ export default function FileDropZone({ selectedFiles, setSelectedFiles, activeFi
   const handleFiles = (files: File[]) => {
     const skipped = files.filter((file) => fileKind(file.name) === null);
     setNotice(skipped.length > 0 ? `Not supported: ${skipped.map((file) => file.name).join(', ')}` : null);
-    // Names identify files in the list and in downloads, so the first file with a name wins.
-    const names = new Set(selectedFiles.map((file) => file.name));
-    const added: File[] = [];
-    for (const file of files) {
-      if (fileKind(file.name) === null || names.has(file.name)) continue;
-      names.add(file.name);
-      added.push(file);
-    }
+    // Names identify files in the list and in downloads: a file with a name already
+    // listed replaces that entry (a newer version), keeping its place.
+    const byName = new Map(selectedFiles.map((file) => [file.name, file]));
+    const added = files.filter((file) => fileKind(file.name) !== null);
+    for (const file of added) byName.set(file.name, file);
     if (added.length > 0) {
-      setSelectedFiles([...selectedFiles, ...added]);
-      onFileSelect(added[0]);
+      setSelectedFiles([...byName.values()]);
+      onFileSelect(byName.get(added[0].name)!);
     }
   };
 

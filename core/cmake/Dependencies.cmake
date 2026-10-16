@@ -1,15 +1,23 @@
-# Third-party libraries, pinned to release tags. Every codec and mesh algorithm
-# in Pixie Juice comes from one of these; src/ only orchestrates them.
+# Third-party libraries, pinned to release tags (or commits, where a library has
+# no releases). Every codec and mesh algorithm in Pixie Juice comes from one of
+# these; src/ only orchestrates them.
 
 include(FetchContent)
 set(FETCHCONTENT_QUIET ON)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 
 macro(pixie_fetch name repo tag)
+  # A shallow clone fetches only branch tips and tags; a pinned commit needs the history,
+  # or its checkout fails as soon as upstream moves on.
+  if("${tag}" MATCHES "^[0-9a-f]+$")
+    set(_pixie_shallow FALSE)
+  else()
+    set(_pixie_shallow TRUE)
+  endif()
   FetchContent_Declare(${name}
     GIT_REPOSITORY ${repo}
     GIT_TAG ${tag}
-    GIT_SHALLOW TRUE
+    GIT_SHALLOW ${_pixie_shallow}
     # Populate only; each library is wired up explicitly below.
     SOURCE_SUBDIR _pixie_no_cmake)
   FetchContent_MakeAvailable(${name})
@@ -26,11 +34,23 @@ if(MSVC)
 else()
   set(MOZJPEG_LIB ${MOZJPEG_BINARY}/libjpeg.a)
 endif()
+# Sanitizer builds instrument mozjpeg too; as its own project it doesn't see this one's options.
+set(MOZJPEG_C_FLAGS "${CMAKE_C_FLAGS}")
+set(MOZJPEG_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS}")
+if(PIXIE_SANITIZE)
+  if(MSVC)
+    string(APPEND MOZJPEG_C_FLAGS " /fsanitize=address")
+  else()
+    string(APPEND MOZJPEG_C_FLAGS " -fsanitize=address,undefined -fno-omit-frame-pointer")
+    string(APPEND MOZJPEG_LINKER_FLAGS " -fsanitize=address,undefined")
+  endif()
+endif()
 set(MOZJPEG_ARGS
   -DCMAKE_BUILD_TYPE=Release
   -DCMAKE_POLICY_VERSION_MINIMUM=3.5
   -DCMAKE_POSITION_INDEPENDENT_CODE=ON
-  "-DCMAKE_C_FLAGS=${CMAKE_C_FLAGS}"
+  "-DCMAKE_C_FLAGS=${MOZJPEG_C_FLAGS}"
+  "-DCMAKE_EXE_LINKER_FLAGS=${MOZJPEG_LINKER_FLAGS}"
   -DENABLE_SHARED=OFF
   -DENABLE_STATIC=ON
   -DWITH_SIMD=OFF            # NASM/x86 SIMD only; not available in WASM

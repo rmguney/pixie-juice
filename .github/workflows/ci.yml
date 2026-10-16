@@ -9,30 +9,19 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  EMSCRIPTEN_VERSION: 6.0.12
-
 jobs:
   wasm-fresh:
-    name: Committed WASM rebuilt with core changes
+    name: Committed WASM built from this core/
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      # Vercel ships web/src/core/generated as committed, so a core change without a rebuild deploys a stale engine.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # Vercel ships web/src/core/generated as committed. The module embeds a hash of the core
+      # sources it was built from (core/cmake/SourceHash.cmake), which must match this tree.
       - name: Check
-        env:
-          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
         run: |
-          if [ -z "$BASE" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
-            echo "No base commit to compare against; skipping."
-            exit 0
-          fi
-          changed=$(git diff --name-only "$BASE" HEAD)
-          if echo "$changed" | grep '^core/' | grep -qv '^core/tests/' \
-            && ! echo "$changed" | grep -q '^web/src/core/generated/'; then
-            echo "::error::core/ changed but web/src/core/generated/ did not. Run 'npm run build:wasm' in web/ and commit the output."
+          source=$(cmake -DCORE=core -P core/cmake/SourceHash.cmake)
+          if ! grep -qaF "$source" web/src/core/generated/pixie_core.wasm; then
+            echo "::error::web/src/core/generated/ was not built from this core/ (source hash $source). Run 'npm run build:wasm' in web/ and commit the output."
             exit 1
           fi
 
@@ -43,10 +32,10 @@ jobs:
       run:
         working-directory: core
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install Ninja
         run: sudo apt-get update && sudo apt-get install -y ninja-build
-      - uses: actions/cache@v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: build/native-asan/_deps
           key: deps-native-${{ hashFiles('core/cmake/Dependencies.cmake') }}
@@ -58,29 +47,21 @@ jobs:
         run: ctest --preset native-asan
 
   web:
-    name: Web (WASM build, types, lint, unit and browser tests)
+    name: Web (types, lint, unit and browser tests on the committed engine)
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: web
     steps:
-      - uses: actions/checkout@v4
-      - name: Install Ninja, Xvfb and software OpenGL
-        run: sudo apt-get update && sudo apt-get install -y ninja-build xvfb libgl1-mesa-dri
-      # No cache for build/wasm/_deps: its build trees record absolute paths to emsdk, and
-      # setup-emsdk installs to a different place on a cache hit than on a miss.
-      - uses: emscripten-core/setup-emsdk@v16
-        with:
-          version: ${{ env.EMSCRIPTEN_VERSION }}
-          actions-cache-folder: emsdk-cache
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Install Xvfb and software OpenGL
+        run: sudo apt-get update && sudo apt-get install -y xvfb libgl1-mesa-dri
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: npm ci
-      - name: Build the WASM engine from source
-        run: npm run build:wasm
       - name: Type check and production build (what Vercel runs)
         run: npm run build
       - name: Lint
@@ -94,7 +75,7 @@ jobs:
         run: xvfb-run --auto-servernum npm run test:e2e
         env:
           E2E_FIREFOX_HEADED: 1
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: failure()
         with:
           name: playwright-report

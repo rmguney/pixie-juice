@@ -58,6 +58,62 @@ test('reports a mesh without triangles instead of showing an empty scene', async
   await expect(page.getByText('Cannot preview this OBJ: The mesh has no triangles')).toBeVisible();
 });
 
+test('a glTF that names external files is not previewed, and nothing is fetched', async ({ page }) => {
+  const requests: string[] = [];
+  page.on('request', (request) => requests.push(request.url()));
+  const gltf = JSON.stringify({ asset: { version: '2.0' }, buffers: [{ byteLength: 4, uri: 'https://example.com/track.bin' }] });
+  await preview(page, 'remote.gltf', Buffer.from(gltf));
+  await expect(page.getByText(/Cannot preview this GLTF: the glTF references external files/)).toBeVisible();
+  expect(requests.filter((url) => url.includes('example.com'))).toEqual([]);
+});
+
+test('previews a .gltf whose buffer is embedded as a data: URI', async ({ page }) => {
+  const positions = Buffer.from(new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]).buffer);
+  const gltf = JSON.stringify({
+    asset: { version: '2.0' },
+    buffers: [{ byteLength: positions.length, uri: `data:application/octet-stream;base64,${positions.toString('base64')}` }],
+    bufferViews: [{ buffer: 0, byteLength: positions.length }],
+    accessors: [{ bufferView: 0, componentType: 5126, count: 3, type: 'VEC3', min: [0, 0, 0], max: [1, 1, 0] }],
+    meshes: [{ primitives: [{ attributes: { POSITION: 0 } }] }],
+    nodes: [{ mesh: 0 }],
+    scenes: [{ nodes: [0] }],
+    scene: 0,
+  });
+  await preview(page, 'triangle.gltf', Buffer.from(gltf));
+  await expectModelShown(page);
+});
+
+test('previews an ASCII FBX', async ({ page }) => {
+  // FBX's text form: one tab of indentation per nesting level.
+  const fbx = [
+    '; FBX 7.3.0 project file',
+    'FBXHeaderExtension:  {',
+    '\tFBXHeaderVersion: 1003',
+    '\tFBXVersion: 7300',
+    '}',
+    'Objects:  {',
+    '\tGeometry: 1000, "Geometry::triangle", "Mesh" {',
+    '\t\tVertices: *9 {',
+    '\t\t\ta: 0,0,0,1,0,0,0,1,0',
+    '\t\t}',
+    '\t\tPolygonVertexIndex: *3 {',
+    '\t\t\ta: 0,1,-3',
+    '\t\t}',
+    '\t}',
+    '\tModel: 2000, "Model::triangle", "Mesh" {',
+    '\t\tVersion: 232',
+    '\t}',
+    '}',
+    'Connections:  {',
+    '\tC: "OO",1000,2000',
+    '\tC: "OO",2000,0',
+    '}',
+    '',
+  ].join('\n');
+  await preview(page, 'triangle.fbx', Buffer.from(fbx));
+  await expectModelShown(page);
+});
+
 test('previews a GLB compressed with EXT_meshopt_compression', async ({ page }) => {
   const glb = readFileSync(fileURLToPath(new URL('./fixtures/grid-meshopt.glb', import.meta.url)));
   await preview(page, 'grid-meshopt.glb', glb);
@@ -77,10 +133,12 @@ interface DracoEncoderModule {
 }
 
 test('previews a GLB compressed with KHR_draco_mesh_compression', async ({ page }) => {
-  await page.addScriptTag({
+  // Encoded on a blank page: the app's Content Security Policy refuses the injected encoder script.
+  const encoder = await page.context().newPage();
+  await encoder.addScriptTag({
     path: fileURLToPath(new URL('../../node_modules/three/examples/jsm/libs/draco/draco_encoder.js', import.meta.url)),
   });
-  const glb = await page.evaluate(() => {
+  const glb = await encoder.evaluate(() => {
     // A square: four corners, two triangles, Draco-encoded.
     const draco = (window as unknown as { DracoEncoderModule: () => DracoEncoderModule }).DracoEncoderModule();
     const mesh = new draco.Mesh();
@@ -129,6 +187,7 @@ test('previews a GLB compressed with KHR_draco_mesh_compression', async ({ page 
     glb.set(bin, 28 + jsonLength);
     return Array.from(glb);
   });
+  await encoder.close();
   await preview(page, 'square-draco.glb', Buffer.from(glb));
   await expectModelShown(page);
 });

@@ -55,13 +55,19 @@ std::string_view skip_space(std::string_view text) {
 }
 
 bool looks_like_obj(std::string_view text) {
-  // Every non-blank, non-comment line of the prefix must be an OBJ statement.
+  // Every non-blank, non-comment line of the prefix must be an OBJ statement
+  // (or the rest of one continued with a trailing "\").
   int records = 0;
+  bool continued = false;
   while (!text.empty()) {
     const auto end = text.find('\n');
     auto line = skip_space(text.substr(0, end));
     text = end == std::string_view::npos ? std::string_view{} : text.substr(end + 1);
-    if (line.empty() || line.front() == '#') continue;
+    const bool was_continued = continued;
+    const auto content = line.substr(0, line.find('#'));
+    const auto last = content.find_last_not_of(" \t\r");
+    continued = last != std::string_view::npos && content[last] == '\\';
+    if (was_continued || line.empty() || line.front() == '#') continue;
     if (end == std::string_view::npos) break;  // possibly cut off at the prefix limit
     // Every OBJ statement keyword (geometry, free-form, grouping, display).
     static constexpr std::array<std::string_view, 37> kKeywords{
@@ -175,6 +181,10 @@ Format detect(ByteView data) {
       return Format::Tga;
     }
   }
+
+  // Last: a binary STL whose triangle count field is wrong (some exporters
+  // leave it 0) still has a size of 84 + 50 bytes per triangle.
+  if (data.size() > 84 && (data.size() - 84) % 50 == 0) return Format::Stl;
 
   return Format::Unknown;
 }

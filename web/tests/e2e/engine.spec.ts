@@ -1,14 +1,17 @@
+import { readFileSync } from 'node:fs';
 import { test, expect } from '@playwright/test';
 import { openApp } from './helpers';
 
 test.beforeEach(async ({ page }) => openApp(page));
 
-test('reports its version and the commit it was built from', async ({ page }) => {
+test('reports its version and what it was built from', async ({ page }) => {
   const info = await page.evaluate(() => window.pixieJuice!.info());
   expect(info.version).toMatch(/^\d+\.\d+\.\d+$/);
-  expect(info.commit).toMatch(/^([0-9a-f]{7,}(-dirty)?|unknown)$/);
   expect(info.timestamp).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
-  await expect(page.getByTestId('version')).toContainText(`v${info.version}`);
+  expect(info.source).toMatch(/^[0-9a-f]{64}$/);
+  // The header shows the site's major and minor version, then the commit it was built from.
+  const [major, minor] = (JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')) as { version: string }).version.split('.');
+  await expect(page.getByTestId('version')).toHaveText(new RegExp(`^v${major}\\.${minor}(\\+[0-9a-f]{7})?$`));
 });
 
 test('detects every supported format', async ({ page }) => {

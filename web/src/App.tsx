@@ -3,15 +3,21 @@ import { usePixie } from './core/usePixie';
 import FileDropZone from './components/FileDropZone';
 import ProcessingPanel from './components/ProcessingPanel';
 import ResultsPanel from './components/ResultsPanel';
-import FilePreview from './components/FilePreview';
+import FilePreview, { ImageCompare } from './components/FilePreview';
 import Icon, { Logo } from './components/Icon';
 import type { BuildInfo } from './core/types';
-import type { ProcessedResult } from './types';
-import { outputName } from './utils/files';
+import { DEFAULT_SETTINGS, type ProcessedResult, type Settings } from './types';
+import { fileKind, outputName } from './utils/files';
 import { formatBytes } from './utils/format';
 import { outputFormat } from './utils/outputFormat';
 
-type PreviewMode = 'original' | 'optimized';
+type PreviewMode = 'original' | 'compare' | 'optimized';
+
+const PREVIEW_MODES: { mode: PreviewMode; label: string }[] = [
+  { mode: 'original', label: 'Original' },
+  { mode: 'compare', label: 'Compare' },
+  { mode: 'optimized', label: 'Optimized' },
+];
 
 /** Results together with the file list they were made for. */
 interface Run {
@@ -25,11 +31,9 @@ function Header({ info }: { info: BuildInfo | null }) {
       <div className="brand">
         <Logo />
         <h1>Pixie Juice</h1>
-        <span className="chip">alpha</span>
         {info && (
-          <span className="chip" title={`Built ${info.timestamp}`} data-testid="version">
-            v{info.version}
-            {info.commit !== 'unknown' && ` · ${info.commit}`}
+          <span className="chip" title={`Engine ${info.version}, built ${info.timestamp}`} data-testid="version">
+            {__SITE_VERSION__}
           </span>
         )}
       </div>
@@ -52,6 +56,7 @@ export default function App() {
   const [run, setRun] = useState<Run | null>(null);
   const [focusedFile, setFocusedFile] = useState<File | null>(null);
   const [previewMode, setPreviewMode] = useState<PreviewMode>('original');
+  const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
 
   // Changing the file list discards results (a run that finishes for an
   // earlier list is ignored below) and shows originals again.
@@ -85,7 +90,12 @@ export default function App() {
     return new File([match.data as BlobPart], outputName(selectedFile.name, extension), { type: mimeType });
   }, [selectedFile, results]);
 
-  const showOptimized = previewMode === 'optimized' && optimizedFile !== null;
+  // Images can be compared on a split view; a mesh shows one side at a time.
+  const modes = optimizedFile
+    ? PREVIEW_MODES.filter(({ mode }) => mode !== 'compare' || fileKind(selectedFile!.name) === 'image')
+    : [];
+  const mode = modes.some((m) => m.mode === previewMode) ? previewMode : 'original';
+  const showOptimized = mode === 'optimized';
   // The file in the preview; null exactly when there are no files (the landing page).
   const previewFile = showOptimized ? optimizedFile : selectedFile;
 
@@ -122,15 +132,14 @@ export default function App() {
         <div className={previewFile ? 'workspace' : 'hero'}>
           {!previewFile && (
             <>
-              <p className="eyebrow">Images and 3D models</p>
               <h2 className="hero-title">
                 Lighter files,
                 <br />
                 <span className="juice-text">same look.</span>
               </h2>
               <p className="lede">
-                Optimize and convert images and meshes in your browser. A C++ engine compiled to WebAssembly does the
-                work, so nothing is uploaded.
+                Shrink images and 3D models in seconds, right in your browser. Your files never leave your device, and
+                every result is checked against the original so it keeps its quality. Free and open source.
               </p>
             </>
           )}
@@ -140,42 +149,54 @@ export default function App() {
             activeFile={selectedFile}
             onFileSelect={setFocusedFile}
           />
-          {previewFile ? (
+          {previewFile && (
             <section className="card preview" aria-label="Preview">
               <div className="card-head">
                 <p className="preview-name">
-                  {previewFile.name} <span className="count mono">{formatBytes(previewFile.size)}</span>
+                  {previewFile.name}{' '}
+                  <span className="count mono">
+                    {mode === 'compare'
+                      ? `${formatBytes(selectedFile!.size)} → ${formatBytes(optimizedFile!.size)}`
+                      : formatBytes(previewFile.size)}
+                  </span>
                 </p>
-                {optimizedFile && (
+                {modes.length > 0 && (
                   <div role="tablist" aria-label="Preview source" className="segmented">
-                    {(['original', 'optimized'] as const).map((mode) => (
+                    {modes.map(({ mode: option, label }) => (
                       <button
-                        key={mode}
+                        key={option}
                         type="button"
                         role="tab"
-                        aria-selected={showOptimized === (mode === 'optimized')}
-                        onClick={() => setPreviewMode(mode)}
+                        aria-selected={mode === option}
+                        onClick={() => setPreviewMode(option)}
                       >
-                        {mode === 'original' ? 'Original' : 'Optimized'}
+                        {label}
                       </button>
                     ))}
                   </div>
                 )}
               </div>
-              <FilePreview file={previewFile} />
+              {mode === 'compare' ? (
+                <ImageCompare original={selectedFile!} optimized={optimizedFile!} />
+              ) : (
+                <FilePreview file={previewFile} />
+              )}
             </section>
-          ) : (
-            <ul className="facts">
-              <li>Runs on your device</li>
-              <li>Every output verified against the original</li>
-              <li>Open source</li>
-            </ul>
           )}
           {previewFile &&
             (results ? (
               <ResultsPanel results={results} onReset={() => updateFiles([])} />
             ) : (
-              <ProcessingPanel files={selectedFiles} api={api} onProcess={(files, results) => setRun({ files, results })} />
+              <ProcessingPanel
+                files={selectedFiles}
+                api={api}
+                settings={settings}
+                onSettingsChange={setSettings}
+                onProcess={(files, results) => {
+                  setRun({ files, results });
+                  setPreviewMode('compare');
+                }}
+              />
             ))}
         </div>
       </main>

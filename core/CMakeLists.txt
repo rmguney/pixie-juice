@@ -20,13 +20,24 @@ if(PIXIE_SANITIZE)
   endif()
 endif()
 
-# Warnings for Pixie Juice's own code (the bundled libraries build with their defaults).
-function(pixie_warnings target)
+# Settings for Pixie Juice's own code; the bundled libraries build with their
+# defaults. Warnings are errors; native builds get stack protection, fortified
+# libc calls (optimised builds) and libstdc++ bounds assertions; UBSan stops at
+# the first report in pixie code, while third-party code only logs.
+function(pixie_project_options target)
   if(MSVC)
-    target_compile_options(${target} PRIVATE /W4 /permissive- /utf-8)
+    target_compile_options(${target} PRIVATE /W4 /WX /permissive- /utf-8)
     target_compile_definitions(${target} PRIVATE _CRT_SECURE_NO_WARNINGS)  # fopen is portable C
   else()
-    target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    if(NOT EMSCRIPTEN)
+      target_compile_options(${target} PRIVATE -fstack-protector-strong
+                             "$<$<NOT:$<CONFIG:Debug>>:-U_FORTIFY_SOURCE;-D_FORTIFY_SOURCE=3>")
+      target_compile_definitions(${target} PRIVATE _GLIBCXX_ASSERTIONS)
+    endif()
+    if(PIXIE_SANITIZE)
+      target_compile_options(${target} PRIVATE -fno-sanitize-recover=undefined)
+    endif()
   endif()
 endfunction()
 
@@ -55,13 +66,17 @@ target_include_directories(pixie_core
   PUBLIC include
   PRIVATE src ${CMAKE_CURRENT_BINARY_DIR}/generated)
 target_link_libraries(pixie_core PRIVATE
-  pixie_jpeg pixie_png pixie_webp pixie_gif pixie_tiff pixie_lcms pixie_mesh_deps pixie_stb)
-pixie_warnings(pixie_core)
+  pixie_jpeg pixie_png pixie_webp pixie_gif pixie_tiff pixie_lcms pixie_mesh_deps pixie_stb ZLIB::ZLIB)
+pixie_project_options(pixie_core)
+# stb's implementations are compiled here but are third-party code: their UBSan reports stay non-fatal.
+if(PIXIE_SANITIZE AND NOT MSVC)
+  set_source_files_properties(src/third_party_impl.cpp PROPERTIES COMPILE_OPTIONS -fsanitize-recover=undefined)
+endif()
 
 if(EMSCRIPTEN)
   add_executable(pixie_wasm src/bindings/embind.cpp)
   target_link_libraries(pixie_wasm PRIVATE pixie_core)
-  pixie_warnings(pixie_wasm)
+  pixie_project_options(pixie_wasm)
   target_include_directories(pixie_wasm PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
   add_dependencies(pixie_wasm pixie_build_info)
   set_target_properties(pixie_wasm PROPERTIES OUTPUT_NAME "pixie_core" SUFFIX ".js")
@@ -96,7 +111,7 @@ if(NOT EMSCRIPTEN)
   target_link_libraries(pixie PRIVATE pixie_core)
   target_include_directories(pixie PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
   target_compile_definitions(pixie PRIVATE PIXIE_BUILDING_SHARED)
-  pixie_warnings(pixie)
+  pixie_project_options(pixie)
   add_dependencies(pixie pixie_build_info)
   set_target_properties(pixie PROPERTIES
     C_VISIBILITY_PRESET hidden
@@ -104,8 +119,11 @@ if(NOT EMSCRIPTEN)
     VISIBILITY_INLINES_HIDDEN ON
     VERSION ${PROJECT_VERSION}
     SOVERSION ${PROJECT_VERSION_MAJOR})
-  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    target_link_options(pixie PRIVATE -Wl,--exclude-libs,ALL)  # keep the bundled libraries' symbols private
+  # The bundled libraries' symbols stay private (some mark their APIs visible).
+  if(APPLE)
+    target_link_options(pixie PRIVATE "LINKER:-exported_symbol,_pixie_*")
+  elseif(NOT WIN32)
+    target_link_options(pixie PRIVATE -Wl,--exclude-libs,ALL)
   endif()
 endif()
 
@@ -118,6 +136,7 @@ if(PIXIE_BUILD_TESTS AND NOT EMSCRIPTEN)
     tests/test_mesh.cpp
     tests/test_robustness.cpp
     tests/test_regressions.cpp
+    tests/test_review.cpp
     tests/test_c_api.cpp
     tests/c_api.c
     src/bindings/c_api.cpp
