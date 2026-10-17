@@ -63,6 +63,19 @@ inline std::size_t count(std::string_view haystack, std::string_view needle) {
 
 inline std::string_view as_text(const Bytes& b) { return {reinterpret_cast<const char*>(b.data()), b.size()}; }
 
+/// Lines of a text file that start with `prefix`.
+inline std::size_t lines_starting(const Bytes& data, std::string_view prefix) {
+  std::size_t n = 0;
+  const auto text = as_text(data);
+  for (std::size_t pos = 0; pos < text.size();) {
+    if (text.substr(pos).starts_with(prefix)) ++n;
+    const auto end = text.find('\n', pos);
+    if (end == std::string_view::npos) break;
+    pos = end + 1;
+  }
+  return n;
+}
+
 /// An n x n grid of quads (2 n^2 triangles), each triangle with its own corner copies.
 inline std::string grid_obj(int n) {
   std::string text = "# grid\no grid\n";

@@ -15,15 +15,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      # Vercel ships web/src/core/generated as committed. The module embeds a hash of the core
-      # sources it was built from (core/cmake/SourceHash.cmake), which must match this tree.
+      # Vercel ships web/src/core/generated as committed. Each module (the engine, the HEIC
+      # decoder) embeds a hash of the core sources it was built from (core/cmake/SourceHash.cmake),
+      # which must match this tree.
       - name: Check
         run: |
           source=$(cmake -DCORE=core -P core/cmake/SourceHash.cmake)
-          if ! grep -qaF "$source" web/src/core/generated/pixie_core.wasm; then
-            echo "::error::web/src/core/generated/ was not built from this core/ (source hash $source). Run 'npm run build:wasm' in web/ and commit the output."
-            exit 1
-          fi
+          for module in pixie_core pixie_heif; do
+            if ! grep -qaF "$source" web/src/core/generated/$module.wasm; then
+              echo "::error::web/src/core/generated/$module.wasm was not built from this core/ (source hash $source). Run 'npm run build:wasm' in web/ and commit the output."
+              exit 1
+            fi
+          done
 
   core:
     name: Core (native tests with ASan + UBSan)
@@ -44,6 +47,9 @@ jobs:
             build/native-asan/_deps/*-subbuild
             build/native-asan/mozjpeg_ep-prefix/src/*.tar.gz
           key: deps-native-sources-${{ hashFiles('core/cmake/Dependencies.cmake', 'core/cmake/patches/**') }}
+          # Sources of an older key are reused: each download's name carries its hash and
+          # its patches' (Dependencies.cmake), so only what changed is fetched again.
+          restore-keys: deps-native-sources-
       - name: Configure
         run: cmake --preset native-asan
       - name: Build
@@ -59,8 +65,9 @@ jobs:
         working-directory: web
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - name: Install Xvfb and software OpenGL
-        run: sudo apt-get update && sudo apt-get install -y xvfb libgl1-mesa-dri
+      # Xvfb comes with the browsers' dependencies (playwright install --with-deps).
+      - name: Install software OpenGL
+        run: sudo apt-get update && sudo apt-get install -y libgl1-mesa-dri
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22

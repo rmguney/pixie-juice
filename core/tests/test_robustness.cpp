@@ -31,9 +31,9 @@ std::vector<Bytes> samples() {
   return out;
 }
 
-void exercise(const Bytes& data) {
+void exercise(const Bytes& data, bool optimizing = true) {
   // Either outcome is fine; reaching the next line without a crash is the test.
-  (void)optimize(data, {.quality = 50});
+  if (optimizing) (void)optimize(data, {.quality = 50});
   (void)decode(data);
   (void)decode_mesh(data);
 }
@@ -62,7 +62,8 @@ TEST_CASE("corrupted files never crash") {
         const std::size_t at = seed % corrupted.size();
         corrupted[at] = std::uint8_t(corrupted[at] ^ (1u << (seed >> 29)));
       }
-      exercise(corrupted);
+      // Optimizing mostly re-encodes what still decodes; the nightly fuzzer covers it further.
+      exercise(corrupted, round % 8 == 0);
     }
   }
 }
@@ -81,4 +82,60 @@ TEST_CASE("headers that claim huge sizes are rejected without allocating them") 
   std::memcpy(bmp.data() + 18, &side, 4);
   std::memcpy(bmp.data() + 22, &side, 4);
   CHECK_FALSE(optimize(bmp, {}).has_value());
+}
+
+TEST_CASE("a few bytes of BMP or TGA can't claim an image they couldn't hold") {
+  // Found by fuzzing: a 58-byte run-length TGA header for 16664 x 3839 pixels,
+  // just under the size cap, which stb_image would allocate and fill.
+  Bytes tga{0, 0, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x18, 0x41, 0xFF, 0x0E, 24, 0};
+  tga.resize(58, 0);
+  CHECK(detect(tga) == Format::Tga);
+  const auto out = optimize(tga, {});
+  REQUIRE_FALSE(out.has_value());
+  CHECK(out.error().message.find("too short") != std::string::npos);
+
+  // A BMP header for 4096 x 4096 with a few rows of data.
+  Bytes bmp = *detail::encode_bmp(fixtures::make_image(4, 4, 0));
+  const std::uint32_t side = 4096;
+  std::memcpy(bmp.data() + 18, &side, 4);
+  std::memcpy(bmp.data() + 22, &side, 4);
+  CHECK_FALSE(decode(bmp).has_value());
+
+  // Genuine run-length TGA of a single colour compresses well, but nowhere near that.
+  detail::Image solid{512, 512, Bytes(512 * 512 * 4, 0)};
+  for (std::size_t i = 0; i < solid.rgba.size(); i += 4) {
+    solid.rgba[i] = 200;
+    solid.rgba[i + 3] = 255;
+  }
+  const auto encoded = *detail::encode_tga(solid);
+  CHECK(encoded.size() * 16 < solid.pixel_count());
+  const auto decoded = decode(encoded);
+  REQUIRE(decoded.has_value());
+  CHECK(decoded->rgba == solid.rgba);
+}
+
+TEST_CASE("a JPEG that runs out of data is an error, not an image filled in") {
+  // A small JPEG whose header claims 8000 x 8000 pixels: libjpeg would decode
+  // 64 megapixels of nothing from a few hundred bytes.
+  Bytes jpeg = *detail::encode_jpeg(fixtures::make_image(16, 16, 4), 80);
+  bool patched = false;
+  for (std::size_t i = 2; i + 9 < jpeg.size(); ++i) {
+    if (jpeg[i] == 0xFF && (jpeg[i + 1] == 0xC0 || jpeg[i + 1] == 0xC2)) {
+      jpeg[i + 5] = 0x1F;  // height 8000
+      jpeg[i + 6] = 0x40;
+      jpeg[i + 7] = 0x1F;  // width 8000
+      jpeg[i + 8] = 0x40;
+      patched = true;
+      break;
+    }
+  }
+  REQUIRE(patched);
+  const auto out = optimize(jpeg, {});
+  REQUIRE_FALSE(out.has_value());
+  CHECK(out.error().message.find("remature end") != std::string::npos);
+
+  // A truncated photo too.
+  Bytes photo = *detail::encode_jpeg(fixtures::make_image(64, 64, 8), 90);
+  photo.resize(photo.size() / 2);
+  CHECK_FALSE(decode(photo).has_value());
 }

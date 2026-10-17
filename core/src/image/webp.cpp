@@ -137,4 +137,9 @@ std::vector<Bytes> webp_candidates(ByteView input, const Image& image, const Opt
   return candidates;
 }
 
+bool webp_is_animated(ByteView data) {
+  WebPBitstreamFeatures features;
+  return WebPGetFeatures(data.data(), data.size(), &features) == VP8_STATUS_OK && features.has_animation;
+}
+
 }  // namespace pixie::detail

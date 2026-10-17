@@ -28,12 +28,18 @@ constexpr std::uint64_t kMaxGifPixels = 512ull * 1024 * 1024;
 
 unsigned le16(ByteView d, std::size_t at) { return unsigned(d[at] | d[at + 1] << 8); }
 
-/// Walks the block structure (without decoding LZW) so that the screen and every
-/// frame are checked against the limits before giflib allocates for them.
-/// Malformed structure is left for giflib to report.
-bool frames_within_limits(ByteView d) {
-  if (d.size() < 13) return true;
-  if (std::uint64_t(le16(d, 6)) * le16(d, 8) > kMaxPixels) return false;
+struct FrameScan {
+  bool within_limits = true;
+  unsigned frames = 0;
+};
+
+/// Walks the block structure (without decoding LZW), counting frames and
+/// checking the screen and every frame against the limits before giflib
+/// allocates for them. Malformed structure is left for giflib to report.
+FrameScan scan_frames(ByteView d) {
+  FrameScan scan;
+  if (d.size() < 13) return scan;
+  if (std::uint64_t(le16(d, 6)) * le16(d, 8) > kMaxPixels) return {false, 0};
   std::size_t pos = 13;
   if (d[10] & 0x80) pos += 3u << ((d[10] & 7) + 1);  // global colour table
   auto skip_sub_blocks = [&] {
@@ -53,17 +59,20 @@ bool frames_within_limits(ByteView d) {
       const std::uint64_t pixels = std::uint64_t(le16(d, pos + 4)) * le16(d, pos + 6);
       const std::uint8_t flags = d[pos + 8];
       total += pixels;
-      if (pixels > kMaxPixels || total > kMaxGifPixels) return false;
+      ++scan.frames;
+      if (pixels > kMaxPixels || total > kMaxGifPixels) return {false, scan.frames};
       pos += 9;
       if (flags & 0x80) pos += 3u << ((flags & 7) + 1);  // local colour table
       ++pos;                                              // LZW minimum code size
       skip_sub_blocks();
     } else {
-      return true;  // trailer, or structure giflib will reject
+      return scan;  // trailer, or structure giflib will reject
     }
   }
-  return true;
+  return scan;
 }
+
+bool frames_within_limits(ByteView d) { return scan_frames(d).within_limits; }
 
 struct Reader {
   ByteView data;
@@ -197,6 +206,8 @@ bool same_frames(GifFileType* a, GifFileType* b) {
 
 }  // namespace
 
+bool gif_is_animated(ByteView data) { return scan_frames(data).frames > 1; }
+
 Result<Image> decode_gif(ByteView data) {
   if (!frames_within_limits(data)) return fail("Not a valid GIF");
   Reader reader{data};
@@ -245,7 +256,7 @@ Result<Image> decode_gif(ByteView data) {
   image.width = gif->SWidth ? std::uint32_t(gif->SWidth) : std::uint32_t(desc.Left + desc.Width);
   image.height = gif->SHeight ? std::uint32_t(gif->SHeight) : std::uint32_t(desc.Top + desc.Height);
   Result<Image> result = fail("GIF dimensions too large");
-  if (image.width && image.height && std::uint64_t(image.width) * image.height <= kMaxPixels) {
+  if (pixels_in_range(image.width, image.height)) {
     // Pixels the first frame doesn't cover stay transparent, as browsers show them
     // (they ignore the background colour).
     image.rgba.assign(image.pixel_count() * 4, 0);

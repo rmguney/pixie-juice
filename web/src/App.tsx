@@ -7,9 +7,9 @@ import FilePreview, { ImageCompare } from './components/FilePreview';
 import Icon, { Logo } from './components/Icon';
 import type { BuildInfo } from './core/types';
 import { DEFAULT_SETTINGS, type ProcessedResult, type Settings } from './types';
-import { fileKind, outputName } from './utils/files';
+import { fileKind } from './utils/files';
 import { formatBytes } from './utils/format';
-import { outputFormat } from './utils/outputFormat';
+import { resultFile } from './utils/resultFile';
 
 type PreviewMode = 'original' | 'compare' | 'optimized';
 
@@ -19,13 +19,11 @@ const PREVIEW_MODES: { mode: PreviewMode; label: string }[] = [
   { mode: 'optimized', label: 'Optimized' },
 ];
 
-/** Each result's file, made once (copying its bytes) rather than on every selection; it goes with its result. */
-const resultFiles = new WeakMap<ProcessedResult, File>();
-
-/** Results together with the file list they were made for. */
+/** Results together with the file list they were made for, and how many files the run took. */
 interface Run {
   files: File[];
   results: ProcessedResult[];
+  total: number;
 }
 
 function Header({ info }: { info: BuildInfo | null }) {
@@ -88,14 +86,7 @@ export default function App() {
   const optimizedFile = useMemo<File | null>(() => {
     const match = results?.find((r) => r.file === selectedFile);
     if (!selectedFile || !match?.success) return null;
-    if (!match.changed) return selectedFile;
-    let file = resultFiles.get(match);
-    if (!file) {
-      const { extension, mimeType } = outputFormat(match.format);
-      file = new File([match.data as BlobPart], outputName(selectedFile.name, extension), { type: mimeType });
-      resultFiles.set(match, file);
-    }
-    return file;
+    return match.changed ? resultFile(match) : selectedFile;
   }, [selectedFile, results]);
 
   // Images can be compared on a split view; a mesh shows one side at a time.
@@ -186,21 +177,21 @@ export default function App() {
               {mode === 'compare' ? (
                 <ImageCompare original={selectedFile!} optimized={optimizedFile!} />
               ) : (
-                <FilePreview file={previewFile} />
+                <FilePreview file={previewFile} files={selectedFiles} />
               )}
             </section>
           )}
           {previewFile &&
             (results ? (
-              <ResultsPanel results={results} onReset={() => updateFiles([])} />
+              <ResultsPanel results={results} total={run!.total} onReset={() => updateFiles([])} />
             ) : (
               <ProcessingPanel
                 files={selectedFiles}
                 api={api}
                 settings={settings}
                 onSettingsChange={setSettings}
-                onProcess={(files, results) => {
-                  setRun({ files, results });
+                onProcess={(files, results, total) => {
+                  setRun({ files, results, total });
                   setPreviewMode('compare');
                 }}
               />

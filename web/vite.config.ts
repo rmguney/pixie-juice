@@ -1,6 +1,7 @@
 import { execSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { defineConfig } from 'vite';
+import { defineConfig, transformWithEsbuild, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 
 // The commit this site is built from: Vercel names the commit it deploys;
@@ -42,9 +43,54 @@ const contentSecurityPolicy = [
   "form-action 'none'",
 ].join('; ');
 
+/**
+ * Emits sw.js, the service worker (src/serviceWorker.ts), with the list of
+ * files to store when it installs, and a version that changes with any file
+ * of the build, so each deploy installs a new worker.
+ */
+function offline(): Plugin {
+  return {
+    name: 'offline',
+    apply: 'build',
+    enforce: 'post',
+    async generateBundle(_, bundle) {
+      const page = bundle['index.html'];
+      if (page?.type !== 'asset') this.error('index.html is missing from the bundle');
+      const files = Object.keys(bundle)
+        .filter((name) => name !== 'index.html')
+        .map((name) => `/${name}`)
+        .sort();
+      const version = createHash('sha256').update(files.join('\n')).update(page.source).digest('hex').slice(0, 16);
+      // Stored on install: the page's own scripts, styles and icons, and the engine
+      // (its worker and module), which every visit loads; the rest when first used.
+      const startup = new Set<string>();
+      for (const [name, item] of Object.entries(bundle)) {
+        if (item.type !== 'chunk' || !item.isEntry) continue;
+        startup.add(name);
+        for (const imported of item.imports) startup.add(imported);
+        item.viteMetadata?.importedCss.forEach((css) => startup.add(css));
+      }
+      for (const name of Object.keys(bundle)) {
+        if (/^assets\/(worker|pixie_core|favicon)-[^/]+$/.test(name)) startup.add(name);
+      }
+      const source = readFileSync(new URL('./src/serviceWorker.ts', import.meta.url), 'utf8');
+      const { code } = await transformWithEsbuild(source, 'serviceWorker.ts', {
+        format: 'iife',
+        minify: true,
+        define: {
+          PRECACHE: JSON.stringify(['/', ...Array.from(startup).sort().map((name) => `/${name}`)]),
+          VERSION: JSON.stringify(version),
+        },
+      });
+      this.emitFile({ type: 'asset', fileName: 'sw.js', source: code });
+    },
+  };
+}
+
 export default defineConfig({
   plugins: [
     react(),
+    offline(),
     {
       name: 'content-security-policy',
       apply: 'build',

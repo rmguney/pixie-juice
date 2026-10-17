@@ -32,16 +32,28 @@ namespace pixie::detail {
 
 namespace {
 
-void append_float(std::string& out, float value) {
+/// Text written straight into the bytes a writer returns, without copying it at the end.
+struct TextOut {
+  Bytes bytes;
+  TextOut& operator+=(std::string_view text) {
+    bytes.insert(bytes.end(), text.begin(), text.end());
+    return *this;
+  }
+  void push_back(char c) { bytes.push_back(std::uint8_t(c)); }
+};
+
+template <class Out>
+void append_float(Out& out, float value) {
   char buffer[32];
   const auto result = std::to_chars(buffer, buffer + sizeof buffer, value);
-  out.append(buffer, result.ptr);
+  out += std::string_view(buffer, std::size_t(result.ptr - buffer));
 }
 
-void append_uint(std::string& out, std::uint64_t value) {
+template <class Out>
+void append_uint(Out& out, std::uint64_t value) {
   char buffer[24];
   const auto result = std::to_chars(buffer, buffer + sizeof buffer, value);
-  out.append(buffer, result.ptr);
+  out += std::string_view(buffer, std::size_t(result.ptr - buffer));
 }
 
 template <std::size_t N>
@@ -143,8 +155,6 @@ struct ObjScan {
   bool exact = true;
   /// Every "v" line carries an RGB colour after the position.
   bool colors = false;
-  /// A comment after a statement or a "\" line continuation, which fast_obj misreads.
-  bool needs_cleaning = false;
   /// Faces that come before the first "usemtl" (they have no material).
   std::size_t faces_without_material = 0;
 };
@@ -190,7 +200,6 @@ ObjScan scan_obj(std::string_view text) {
     const auto comment = raw.find('#');
     const auto line = trim(raw.substr(0, comment));
     if (line.empty()) return;
-    if (comment != std::string_view::npos || line.back() == '\\') scan.needs_cleaning = true;
     const auto [keyword, rest] = split_keyword(line);
     if (std::find(kUnsupported.begin(), kUnsupported.end(), keyword) != kUnsupported.end()) scan.exact = false;
     if (keyword == "o" || keyword == "g") ++objects;
@@ -216,6 +225,17 @@ ObjScan scan_obj(std::string_view text) {
   if (objects > 1 || (smoothing && !has_normals)) scan.exact = false;
   scan.colors = position_width == 6 && !mixed_widths;
   return scan;
+}
+
+/// A comment after a statement or a "\" line continuation, which fast_obj misreads.
+bool needs_cleaning(std::string_view text) {
+  bool found = false;
+  for_each_line(text, [&](std::string_view raw) {
+    const auto comment = raw.find('#');
+    const auto line = trim(raw.substr(0, comment));
+    if (!line.empty() && (comment != std::string_view::npos || line.back() == '\\')) found = true;
+  });
+  return found;
 }
 
 /// The OBJ text with comments cut and "\" continuations joined. fast_obj stops
@@ -330,7 +350,39 @@ std::filesystem::path temp_directory() {
 #endif
 }
 
+/// "pixie-" and 64 random bits: a name no other call or process picks.
+std::string random_name(std::random_device& entropy) {
+  const std::uint64_t id = std::uint64_t(entropy()) << 32 | entropy();
+  return "pixie-" + std::to_string(id);
+}
+
 }  // namespace
+
+TempDir::TempDir() {
+  const auto dir = temp_directory();
+  std::random_device entropy;
+  for (int attempt = 0; attempt < 8 && path_.empty(); ++attempt) {
+    const auto path = dir / random_name(entropy);
+    std::error_code ec;
+    if (std::filesystem::create_directory(path, ec)) path_ = path.string();
+  }
+}
+
+TempDir::~TempDir() {
+  std::error_code ec;
+  if (!path_.empty()) std::filesystem::remove_all(path_, ec);
+}
+
+bool TempDir::write(std::string_view relative, ByteView data) const {
+  if (path_.empty()) return false;
+  const auto path = std::filesystem::path(path_) / std::filesystem::path(std::string(relative));
+  std::error_code ec;
+  std::filesystem::create_directories(path.parent_path(), ec);
+  std::FILE* file = std::fopen(path.string().c_str(), "wb");
+  if (!file) return false;
+  const bool ok = std::fwrite(data.data(), 1, data.size(), file) == data.size();
+  return std::fclose(file) == 0 && ok;
+}
 
 TempFile::TempFile(std::string_view extension) {
   // A random name, created exclusively: concurrent calls and processes never
@@ -339,8 +391,7 @@ TempFile::TempFile(std::string_view extension) {
   const auto dir = temp_directory();
   std::random_device entropy;
   for (int attempt = 0; attempt < 8 && path_.empty(); ++attempt) {
-    const std::uint64_t id = std::uint64_t(entropy()) << 32 | entropy();
-    auto path = (dir / ("pixie-" + std::to_string(id) + std::string(extension))).string();
+    auto path = (dir / (random_name(entropy) + std::string(extension))).string();
     if (std::FILE* file = std::fopen(path.c_str(), "wbx")) {
       std::fclose(file);
       path_ = std::move(path);
@@ -390,13 +441,12 @@ std::string obj_header(ByteView source) {
 Result<ReadMesh> read_obj(ByteView data, MeshUse use) {
   Reading reading{use};
   std::string_view text = as_text(data);
-  ObjScan scan = scan_obj(text);
   std::string cleaned;
-  if (scan.needs_cleaning) {
+  if (needs_cleaning(text)) {
     cleaned = clean_obj(text);
     text = cleaned;
-    scan = scan_obj(text);
   }
+  const ObjScan scan = scan_obj(text);
   if (!scan.exact && reading.inexact()) return std::move(reading.read);
 
   MemoryObj file{ByteView(reinterpret_cast<const std::uint8_t*>(text.data()), text.size())};
@@ -405,7 +455,16 @@ Result<ReadMesh> read_obj(ByteView data, MeshUse use) {
       fast_obj_read_with_callbacks("model.obj", &callbacks, &file), fast_obj_destroy);
   const fastObjMesh* obj = owner.get();
   if (!obj) return fail("OBJ parse failed");
-  if (obj->face_count == 0) return reading.finish();  // a point cloud: no triangles
+  if (obj->face_count == 0) {  // a point cloud: displayed as its vertices
+    if (use == MeshUse::Display && obj->position_count > 1) {
+      Mesh& points = reading.read.mesh;
+      points.positions.assign(obj->positions + 3, obj->positions + std::size_t(obj->position_count) * 3);
+      if (scan.colors && obj->color_count == obj->position_count) {
+        points.colors.assign(obj->colors + 3, obj->colors + std::size_t(obj->color_count) * 3);
+      }
+    }
+    return reading.finish();
+  }
 
   // An index 0 (invalid OBJ) still stops fast_obj mid-face: every corner must belong to a face.
   std::size_t corners = 0;
@@ -444,24 +503,37 @@ Result<ReadMesh> read_obj(ByteView data, MeshUse use) {
   for (unsigned m = 0; m < obj->material_count; ++m) {
     mesh.group_names.emplace_back(obj->materials[m].name ? obj->materials[m].name : "");
   }
+  // Each corner becomes a vertex of its own, as the writer expects.
+  auto add_corner = [&](std::size_t corner) {
+    const fastObjIndex& idx = obj->indices[corner];
+    const auto vertex = std::uint32_t(mesh.vertex_count());
+    mesh.positions.insert(mesh.positions.end(), obj->positions + idx.p * 3, obj->positions + idx.p * 3 + 3);
+    if (colors) mesh.colors.insert(mesh.colors.end(), obj->colors + idx.p * 3, obj->colors + idx.p * 3 + 3);
+    if (any_uv) mesh.uvs.insert(mesh.uvs.end(), obj->texcoords + idx.t * 2, obj->texcoords + idx.t * 2 + 2);
+    if (any_normal) mesh.normals.insert(mesh.normals.end(), obj->normals + idx.n * 3, obj->normals + idx.n * 3 + 3);
+    return vertex;
+  };
   std::size_t base = 0;
   for (unsigned f = 0; f < obj->face_count; ++f) {
     const unsigned count = obj->face_vertices[f];
     if (grouped && obj->face_materials[f] >= obj->material_count) return fail("Inconsistent OBJ face data");
-    // Polylines ("l") have no surface; files with them are already inexact, and display skips them.
+    // Polylines ("l") have no surface: files with them are already inexact; display draws their segments.
     if (obj->face_lines && obj->face_lines[f]) {
+      if (use == MeshUse::Display && count >= 2) {
+        // Each corner once; a segment joins it to the one before.
+        std::uint32_t previous = add_corner(base);
+        for (unsigned k = 1; k < count; ++k) {
+          const std::uint32_t current = add_corner(base + k);
+          mesh.lines.push_back(previous);
+          mesh.lines.push_back(current);
+          previous = current;
+        }
+      }
       base += count;
       continue;
     }
     for (unsigned k = 1; k + 1 < count; ++k) {
-      for (const std::size_t corner : {base, base + k, base + k + 1}) {
-        const fastObjIndex& idx = obj->indices[corner];
-        mesh.indices.push_back(std::uint32_t(mesh.vertex_count()));
-        mesh.positions.insert(mesh.positions.end(), obj->positions + idx.p * 3, obj->positions + idx.p * 3 + 3);
-        if (colors) mesh.colors.insert(mesh.colors.end(), obj->colors + idx.p * 3, obj->colors + idx.p * 3 + 3);
-        if (any_uv) mesh.uvs.insert(mesh.uvs.end(), obj->texcoords + idx.t * 2, obj->texcoords + idx.t * 2 + 2);
-        if (any_normal) mesh.normals.insert(mesh.normals.end(), obj->normals + idx.n * 3, obj->normals + idx.n * 3 + 3);
-      }
+      for (const std::size_t corner : {base, base + k, base + k + 1}) mesh.indices.push_back(add_corner(corner));
       if (grouped) {
         mesh.triangle_groups.push_back(f < scan.faces_without_material ? 0 : obj->face_materials[f] + first_material);
       }
@@ -486,7 +558,8 @@ Bytes write_obj(const Mesh& mesh, std::string_view header) {
     corners[i][2] = mesh.normals.empty() ? 0 : normals.add(&mesh.normals[v * 3]);
   }
 
-  std::string out(header);
+  TextOut out;
+  out += header;
   const auto& p = positions.values();
   for (std::size_t i = 0; i < p.size(); i += 6) {
     out += "v ";
@@ -539,7 +612,7 @@ Bytes write_obj(const Mesh& mesh, std::string_view header) {
     }
     out.push_back('\n');
   }
-  return Bytes(out.begin(), out.end());
+  return std::move(out.bytes);
 }
 
 // ---------------------------------------------------------------------------
@@ -552,8 +625,7 @@ Result<ReadMesh> read_stl(ByteView data, MeshUse use, StlInfo* info) {
   if (data.size() >= 84) std::memcpy(&declared, data.data() + 80, 4);
   // Binary when the size matches the declared triangle count, or when the file
   // isn't ASCII STL and its size fits whole records (some exporters write a wrong count).
-  const auto text = trim(as_text(data.first(std::min<std::size_t>(data.size(), 1024))));
-  const bool ascii = text.starts_with("solid") && text.find("facet") != std::string_view::npos;
+  const bool ascii = is_ascii_stl(data);
   const bool binary = data.size() >= 84 && (data.size() == 84 + std::uint64_t(declared) * 50 ||
                                             (!ascii && data.size() > 84 && (data.size() - 84) % 50 == 0));
   if (info) info->binary = binary;
@@ -570,7 +642,9 @@ Result<ReadMesh> read_stl(ByteView data, MeshUse use, StlInfo* info) {
     bool first = true;
     bool ok = true;
     int solids = 0;
-    for_each_line(as_text(data), [&](std::string_view raw) {
+    auto text = as_text(data);
+    if (text.starts_with("\xEF\xBB\xBF")) text.remove_prefix(3);  // a UTF-8 byte order mark
+    for_each_line(text, [&](std::string_view raw) {
       const auto line = trim(raw);
       if (line.starts_with("solid")) ++solids;
       if (first && line.starts_with("solid")) {
@@ -618,7 +692,10 @@ Bytes write_stl(const Mesh& mesh, const StlInfo& info) {
     }
     return out;
   }
-  std::string out = "solid " + info.name + "\n";
+  TextOut out;
+  out += "solid ";
+  out += info.name;
+  out += "\n";
   for (std::size_t t = 0; t < triangles; ++t) {
     const auto n = face_normal(vertex(t, 0), vertex(t, 1), vertex(t, 2));
     out += "facet normal ";
@@ -637,8 +714,10 @@ Bytes write_stl(const Mesh& mesh, const StlInfo& info) {
     }
     out += "endloop\nendfacet\n";
   }
-  out += "endsolid " + info.name + "\n";
-  return Bytes(out.begin(), out.end());
+  out += "endsolid ";
+  out += info.name;
+  out += "\n";
+  return std::move(out.bytes);
 }
 
 // ---------------------------------------------------------------------------
@@ -787,12 +866,14 @@ Bytes write_ply(const Mesh& mesh, const PlyInfo& info) {
   append_uint(header, mesh.triangle_count());
   header += "\nproperty list uchar uint vertex_indices\nend_header\n";
 
-  Bytes out(header.begin(), header.end());
+  // ASCII rows are written as text into the same bytes.
+  TextOut out;
+  out += header;
+  TextOut& text = out;
   auto put = [&](const void* p, std::size_t n) {
     const auto* b = static_cast<const std::uint8_t*>(p);
-    out.insert(out.end(), b, b + n);
+    out.bytes.insert(out.bytes.end(), b, b + n);
   };
-  std::string text;
   std::vector<float> floats;
   floats.reserve(11);
   for (std::size_t v = 0; v < mesh.vertex_count(); ++v) {
@@ -841,8 +922,7 @@ Bytes write_ply(const Mesh& mesh, const PlyInfo& info) {
       text.push_back('\n');
     }
   }
-  out.insert(out.end(), text.begin(), text.end());
-  return out;
+  return std::move(out.bytes);
 }
 
 }  // namespace pixie::detail

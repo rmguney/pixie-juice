@@ -2,8 +2,10 @@
 
 #include "pixie/pixie.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstring>
 #include <optional>
 
 namespace pixie::detail {
@@ -22,8 +24,30 @@ inline void append_le32(Bytes& out, std::uint32_t value) {
   append_le16(out, value >> 16);
 }
 
+inline std::uint32_t be32(const std::uint8_t* p) {
+  return std::uint32_t(p[0]) << 24 | std::uint32_t(p[1]) << 16 | std::uint32_t(p[2]) << 8 | p[3];
+}
+
+inline bool starts_with(ByteView data, std::string_view prefix) {
+  return data.size() >= prefix.size() && std::memcmp(data.data(), prefix.data(), prefix.size()) == 0;
+}
+
 /// Most pixels any decoder will allocate for (256 MB of RGBA).
 inline constexpr std::uint64_t kMaxPixels = 64ull * 1024 * 1024;
+
+/// Dimensions every decoder accepts: not empty, and at most kMaxPixels.
+inline bool pixels_in_range(std::uint64_t width, std::uint64_t height) {
+  return width != 0 && height != 0 && width * height <= kMaxPixels;
+}
+
+/// RGBA with colour premultiplied by alpha, turned into straight alpha.
+inline void unpremultiply(Bytes& rgba) {
+  for (std::size_t i = 0; i + 3 < rgba.size(); i += 4) {
+    const unsigned a = rgba[i + 3];
+    if (a == 0 || a == 255) continue;
+    for (int c = 0; c < 3; ++c) rgba[i + c] = std::uint8_t(std::min(255u, (rgba[i + c] * 255u + a / 2) / a));
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Images
@@ -53,6 +77,14 @@ Result<Image> decode_gif(ByteView data);
 bool png_within_limits(ByteView data);
 /// A PNG lodepng may decode: a valid header, within kMaxPixels and png_within_limits.
 bool png_decodable(ByteView data);
+/// More than one frame or page: an optimized copy at a new size couldn't keep them.
+bool png_is_animated(ByteView data);
+bool gif_is_animated(ByteView data);
+bool webp_is_animated(ByteView data);
+bool tiff_is_multi_page(ByteView data);
+/// Scales the image down (sRGB-correct, alpha-weighted) so its longest side is at
+/// most `max_size` (0: any size); false if resizing failed.
+[[nodiscard]] bool fit_within(Image& image, std::uint32_t max_size);
 /// A TIFF libtiff opens but can't decode here (a codec not built in, floating-point samples):
 /// optimizing passes it through.
 bool tiff_passes_through(ByteView data);
@@ -70,8 +102,8 @@ int exif_orientation(ByteView exif);
 Bytes minimal_exif(int orientation);
 /// Turns stored pixels into display orientation.
 void apply_orientation(Image& image, int orientation);
-/// Converts pixels from an RGB ICC profile to sRGB; false if the profile can't be used.
-bool convert_to_srgb(Image& image, ByteView icc);
+/// Converts pixels from an RGB or grey ICC profile to sRGB; left as they are when the profile can't be used.
+void convert_to_srgb(Image& image, ByteView icc);
 /// The profile's colour space from its header: "RGB ", "GRAY", "CMYK"...; empty without one.
 std::string_view icc_colour_space(ByteView icc);
 
@@ -100,7 +132,7 @@ std::vector<Bytes> png_candidates(ByteView input, const Options& options);
 std::vector<Bytes> webp_candidates(ByteView input, const Image& image, const Options& options);
 std::vector<Bytes> gif_candidates(ByteView input, const Options& options);
 std::vector<Bytes> ico_candidates(ByteView input, const Options& options);
-std::vector<Bytes> tiff_candidates(ByteView input, const Options& options);
+std::vector<Bytes> tiff_candidates(ByteView input, const Image& image, const Options& options);
 
 // Encoders for conversions (and BMP/TGA optimization). `icc` is embedded by
 // formats that can carry a profile; callers convert to sRGB for the others.
@@ -116,6 +148,22 @@ Result<Bytes> encode_ico(const Image& image);
 // ---------------------------------------------------------------------------
 // Files: some libraries (miniply, gltfpack) only read and write paths. In
 // WASM these live in Emscripten's in-memory file system.
+
+/// A new, empty directory in the temp directory, removed with everything in it.
+class TempDir {
+ public:
+  TempDir();
+  ~TempDir();
+  TempDir(const TempDir&) = delete;
+  TempDir& operator=(const TempDir&) = delete;
+
+  [[nodiscard]] const std::string& path() const { return path_; }
+  /// Writes `data` at `relative` inside the directory, creating subdirectories.
+  bool write(std::string_view relative, ByteView data) const;
+
+ private:
+  std::string path_;
+};
 
 class TempFile {
  public:
@@ -146,6 +194,8 @@ struct Mesh {
   /// file has no materials. An empty name means "no material".
   std::vector<std::uint32_t> triangle_groups;
   std::vector<std::string> group_names;
+  /// Line segments (two indices each), read for display only.
+  std::vector<std::uint32_t> lines;
 
   [[nodiscard]] std::size_t vertex_count() const { return positions.size() / 3; }
   [[nodiscard]] std::size_t triangle_count() const { return indices.size() / 3; }
@@ -181,6 +231,8 @@ struct StlInfo {
   std::string name;
 };
 Result<ReadMesh> read_stl(ByteView data, MeshUse use, StlInfo* info);
+/// Starts (after a byte order mark and whitespace) as ASCII STL: "solid", then "facet" early on.
+bool is_ascii_stl(ByteView data);
 Bytes write_stl(const Mesh& mesh, const StlInfo& info);
 
 struct PlyInfo {
@@ -194,8 +246,10 @@ struct PlyInfo {
 Result<ReadMesh> read_ply(ByteView data, MeshUse use, PlyInfo* info);
 Bytes write_ply(const Mesh& mesh, const PlyInfo& info);
 
-/// glTF/GLB through gltfpack; output is always GLB.
-/// nullopt: a file gltfpack can't carry over faithfully (Draco, other extensions), passed through.
-Result<std::optional<Bytes>> optimize_gltf(ByteView data, Format format, const Options& options);
+/// glTF/GLB through gltfpack; output is always GLB, holding the `resources` the glTF refers to.
+/// nullopt: a file gltfpack can't carry over faithfully (Draco, other extensions), passed through,
+/// or a GLB no smaller than the file and the resources it uses.
+Result<std::optional<Bytes>> optimize_gltf(ByteView data, Format format, const Options& options,
+                                           std::span<const Resource> resources);
 
 }  // namespace pixie::detail

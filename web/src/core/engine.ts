@@ -1,7 +1,9 @@
-// The engine proper: the Emscripten module (C++ core) plus SVGO for SVG.
-// Runs inside the worker; see worker.ts.
+// The engine proper: the Emscripten module (C++ core) plus SVGO for SVG, the
+// HEIC module, and the browser's own AVIF decoder. Runs inside the worker; see worker.ts.
 
 import createPixieCore, { type MainModule } from './generated/pixie_core.js';
+import type { MainModule as HeifModule } from './generated/pixie_heif.js';
+import { externalUris, gltfJson, uriFileName } from '../utils/companions';
 import type { BuildInfo, ConvertTarget, CoreOptions, CoreResult, DecodedImage, DecodedMesh, FormatName } from './types';
 
 /** Shape of the objects the C++ bindings return (typed `any` by Embind). */
@@ -19,11 +21,20 @@ interface NativeImage {
   error?: string;
 }
 
+/** Pixels decoded outside the core, in the colour space `icc` describes (sRGB when empty). */
+interface ForeignImage {
+  width: number;
+  height: number;
+  rgba: Uint8Array;
+  icc: Uint8Array;
+}
+
 interface NativeMesh {
   positions?: Float32Array;
   normals?: Float32Array;
   colors?: Float32Array;
   indices?: Uint32Array;
+  lines?: Uint32Array;
   error?: string;
 }
 
@@ -83,6 +94,63 @@ async function optimizeSvgFile(data: Uint8Array, options: CoreOptions): Promise<
     : { data, format: 'svg', changed: false };
 }
 
+/** The HEIC module (libheif and libde265), loaded the first time a HEIC file needs it. */
+let heifModule: Promise<HeifModule> | null = null;
+
+async function decodeHeic(data: Uint8Array): Promise<ForeignImage> {
+  heifModule ??= import('./generated/pixie_heif.js').then(({ default: create }) =>
+    create({ print: () => {}, printErr: () => {} }),
+  );
+  let module: HeifModule;
+  try {
+    module = await heifModule;
+  } catch (error) {
+    heifModule = null; // a failed download is tried again next time
+    throw error;
+  }
+  const { width, height, rgba, icc, error } = module.decodeHeif(data) as Partial<ForeignImage> & { error?: string };
+  if (error !== undefined || !width || !height || !rgba || !icc) throw new EngineError(error ?? 'HEIC decode failed');
+  return { width, height, rgba, icc };
+}
+
+/** AVIF through the browser's own decoder, which every supported browser has; the pixels come out in sRGB. */
+async function decodeAvif(data: Uint8Array): Promise<ForeignImage> {
+  let bitmap: ImageBitmap;
+  try {
+    bitmap = await createImageBitmap(new Blob([data as BlobPart], { type: 'image/avif' }), { premultiplyAlpha: 'none' });
+  } catch {
+    throw new EngineError('This browser could not decode the AVIF');
+  }
+  try {
+    const { width, height } = bitmap;
+    const context = typeof OffscreenCanvas === 'undefined' ? null : new OffscreenCanvas(width, height).getContext('2d');
+    if (!context) throw new EngineError('This browser cannot read decoded images in a worker');
+    context.drawImage(bitmap, 0, 0);
+    const pixels = context.getImageData(0, 0, width, height).data;
+    return { width, height, rgba: new Uint8Array(pixels.buffer, pixels.byteOffset, pixels.byteLength), icc: new Uint8Array() };
+  } finally {
+    bitmap.close();
+  }
+}
+
+/** The resources a glTF names, as bytes: Blobs are read here, only when named. */
+async function namedResources(data: Uint8Array, resources: NonNullable<CoreOptions['resources']>) {
+  let names: Set<string>;
+  try {
+    names = new Set(externalUris(gltfJson(data).json).map(uriFileName));
+  } catch {
+    return []; // not a glTF: nothing to pack
+  }
+  return Promise.all(
+    resources
+      .filter((resource) => names.has(resource.name))
+      .map(async ({ name, data: content }) => ({
+        name,
+        data: content instanceof Blob ? new Uint8Array(await content.arrayBuffer()) : content,
+      })),
+  );
+}
+
 /** Area-weighted vertex normals, as three.js's computeVertexNormals. */
 function smoothNormals(positions: Float32Array, indices: Uint32Array): Float32Array {
   const normals = new Float32Array(positions.length);
@@ -138,19 +206,46 @@ export class Engine {
     return this.native.detect(data);
   }
 
+  /** HEIC or AVIF, which the core recognises but leaves to other decoders; null for other files. */
+  private foreignFormat(data: Uint8Array): 'heic' | 'avif' | null {
+    // Their ftyp box is at the start: no need to copy the whole file into the module.
+    const kind = this.native.detect(data.subarray(0, 512));
+    return kind === 'image:heic' ? 'heic' : kind === 'image:avif' ? 'avif' : null;
+  }
+
+  private decodeForeign(data: Uint8Array): Promise<ForeignImage> | null {
+    const format = this.foreignFormat(data);
+    return format === 'heic' ? decodeHeic(data) : format === 'avif' ? decodeAvif(data) : null;
+  }
+
   async optimize(data: Uint8Array, options: CoreOptions = {}): Promise<CoreResult> {
     if (data.length === 0) throw new EngineError('Input is empty');
-    const result = unwrap(this.native.optimize(data, options) as NativeResult);
+    // There's no HEIC or AVIF encoder: kept as they are, without copying them into the module.
+    const foreign = this.foreignFormat(data);
+    if (foreign) return { data, format: foreign, changed: false };
+    const settings = options.resources ? { ...options, resources: await namedResources(data, options.resources) } : options;
+    const result = unwrap(this.native.optimize(data, settings) as NativeResult);
     // The core recognises SVG and leaves it to SVGO.
     return result.format === 'svg' ? optimizeSvgFile(data, options) : result;
   }
 
-  convert(data: Uint8Array, target: ConvertTarget, options: CoreOptions = {}): CoreResult {
+  async convert(data: Uint8Array, target: ConvertTarget, options: CoreOptions = {}): Promise<CoreResult> {
     if (data.length === 0) throw new EngineError('Input is empty');
+    const foreign = await this.decodeForeign(data);
+    if (foreign) {
+      const { width, height, rgba, icc } = foreign;
+      return unwrap(this.native.convertPixels(rgba, width, height, icc, target, options) as NativeResult);
+    }
     return unwrap(this.native.convert(data, target, options) as NativeResult);
   }
 
-  decodeImage(data: Uint8Array): DecodedImage {
+  async decodeImage(data: Uint8Array): Promise<DecodedImage> {
+    const foreign = await this.decodeForeign(data);
+    if (foreign) {
+      const { width, height, icc } = foreign;
+      const rgba = icc.length > 0 ? (this.native.toSrgb(foreign.rgba, width, height, icc) as Uint8Array) : foreign.rgba;
+      return { width, height, rgba: new Uint8ClampedArray(rgba.buffer, rgba.byteOffset, rgba.byteLength) };
+    }
     const result = this.native.decodeImage(data) as NativeImage;
     if (result.error !== undefined || !result.rgba || !result.width || !result.height) {
       throw new EngineError(result.error ?? 'Decode failed');
@@ -164,9 +259,11 @@ export class Engine {
 
   /** Done here rather than on the page: normals and colours of a large mesh take a while. */
   decodeMesh(data: Uint8Array): DecodedMesh {
-    const { positions, normals, colors, indices, error } = this.native.decodeMesh(data) as NativeMesh;
+    const { positions, normals, colors, indices, lines, error } = this.native.decodeMesh(data) as NativeMesh;
     if (error !== undefined || !positions || !indices) throw new EngineError(error ?? 'Decode failed');
     if (colors) linearize(colors);
-    return { positions, normals: normals ?? smoothNormals(positions, indices), colors, indices };
+    // Points and lines are drawn unlit: only triangles need normals.
+    const shaded = normals ?? (indices.length > 0 ? smoothNormals(positions, indices) : undefined);
+    return { positions, normals: shaded, colors, indices, lines };
   }
 }

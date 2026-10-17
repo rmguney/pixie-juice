@@ -6,7 +6,7 @@
  * a C FFI (Python ctypes/cffi, C#, Go, ...). The "pixie" shared library
  * (pixie.dll, libpixie.so, libpixie.dylib) exports exactly these functions.
  *
- * Results own their memory until pixie_result_free / pixie_image_free; every
+ * Results own their memory until pixie_result_free, pixie_image_free or pixie_mesh_free; every
  * const char* that isn't an error is a static string. Calls keep no state
  * between them and may run on several threads at once.
  */
@@ -31,6 +31,7 @@ typedef struct pixie_options {
   int lossless;          /* nonzero: never change pixels or geometry */
   int preserve_metadata; /* nonzero: keep EXIF, XMP, comments and other non-visual metadata */
   float mesh_ratio;      /* share of mesh triangles to keep, (0, 1] */
+  unsigned max_size;     /* scale images down to fit this many pixels on their longest side; 0 keeps the size */
 } pixie_options;
 
 /* Library-owned storage behind a result. */
@@ -62,9 +63,11 @@ typedef struct pixie_mesh {
   size_t index_count;
   const char* error;       /* NULL on success, otherwise why it failed */
   pixie_storage* storage;
+  const uint32_t* lines;   /* two per line segment, or NULL; with no triangles or lines, the vertices are points */
+  size_t line_index_count;
 } pixie_mesh;
 
-/* Quality 75, lossy, metadata stripped, every triangle kept. */
+/* Quality 75, lossy, metadata stripped, every triangle kept, images at their size. */
 PIXIE_API pixie_options pixie_default_options(void);
 
 /* Format name of the data ("png", "jpeg", "obj", ...) or "unknown". */
@@ -81,7 +84,8 @@ PIXIE_API pixie_result pixie_convert(const uint8_t* data, size_t size, const cha
 /* Decodes the first frame of a raster image as upright sRGB RGBA; see pixie::decode. */
 PIXIE_API pixie_image pixie_decode(const uint8_t* data, size_t size);
 
-/* Reads the triangles of an OBJ, STL or PLY for display; see pixie::decode_mesh. */
+/* Reads an OBJ, STL or PLY for display (triangles, lines, or the vertices of a point cloud);
+   see pixie::decode_mesh. */
 PIXIE_API pixie_mesh pixie_decode_mesh(const uint8_t* data, size_t size);
 
 /* Release a result, image or mesh and reset it to zero; safe to call twice. */

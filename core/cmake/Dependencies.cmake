@@ -26,7 +26,7 @@ function(pixie_patch out name)
     DOWNLOAD_NAME ${name}-${hash}.tar.gz
     PARENT_SCOPE)
 endfunction()
-foreach(name mozjpeg zopfli stb meshoptimizer miniply)
+foreach(name mozjpeg zopfli stb meshoptimizer miniply libtiff libde265 libheif)
   string(TOUPPER ${name} upper)
   pixie_patch(${upper}_PATCH ${name})
 endforeach()
@@ -55,6 +55,9 @@ endif()
 # Sanitizer builds instrument mozjpeg too; as its own project it doesn't see this one's options.
 set(MOZJPEG_C_FLAGS "${CMAKE_C_FLAGS}")
 set(MOZJPEG_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS}")
+if(PIXIE_FUZZ)
+  string(APPEND MOZJPEG_C_FLAGS " -fsanitize=fuzzer-no-link")
+endif()
 if(PIXIE_SANITIZE)
   if(MSVC)
     string(APPEND MOZJPEG_C_FLAGS " /fsanitize=address")
@@ -178,8 +181,12 @@ else()
   target_compile_options(pixie_gif PRIVATE -w)
 endif()
 
-# --- TIFF: libtiff (LZW, Deflate, PackBits, CCITT, ...) with zlib for Deflate.
-# zlib is declared as the package find_package(ZLIB) resolves to inside libtiff.
+# --- TIFF: libtiff (LZW, PackBits, CCITT, ...) with zlib for Deflate, zstd for
+# Zstandard, liblzma (xz) for LZMA, and this build's mozjpeg and libwebp for
+# JPEG and WebP compression. zlib, zstd and liblzma are declared as the packages
+# find_package() resolves to inside libtiff; JPEG and WebP are handed to its
+# find modules as these targets. Each check libtiff would compile against a
+# library not built yet is answered up front.
 set(ZLIB_BUILD_SHARED OFF CACHE BOOL "" FORCE)
 set(ZLIB_BUILD_STATIC ON CACHE BOOL "" FORCE)
 set(ZLIB_BUILD_TESTING OFF CACHE BOOL "" FORCE)
@@ -192,19 +199,121 @@ if(NOT TARGET ZLIB::ZLIB)
   add_library(ZLIB::ZLIB ALIAS zlibstatic)
 endif()
 
-# win32-io: tiffio.h gives its users the POSIX I/O layer's handle type on Windows
-# too, so the library uses that layer as well and callbacks match their types.
-foreach(opt tiff-tools tiff-tests tiff-contrib tiff-docs tiff-install tiff-cxx tiff-deprecated
-            jpeg old-jpeg jpeg12 jbig lerc lzma zstd webp libdeflate ld-version-script win32-io)
+foreach(opt ZSTD_BUILD_PROGRAMS ZSTD_BUILD_SHARED ZSTD_BUILD_TESTS ZSTD_BUILD_CONTRIB ZSTD_LEGACY_SUPPORT
+            ZSTD_MULTITHREAD_SUPPORT ZSTD_BUILD_DICTBUILDER)
   set(${opt} OFF CACHE BOOL "" FORCE)
 endforeach()
-set(tiff-static ON CACHE BOOL "" FORCE)
-set(zlib ON CACHE BOOL "" FORCE)
+set(ZSTD_BUILD_STATIC ON CACHE BOOL "" FORCE)
+pixie_fetch(ZSTD
+  https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz
+  eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3
+  SOURCE_SUBDIR build/cmake
+  OVERRIDE_FIND_PACKAGE)
+add_library(ZSTD::ZSTD ALIAS libzstd_static)
+set(ZSTD_HAVE_DECOMPRESS_STREAM ON CACHE BOOL "" FORCE)
+
+foreach(opt XZ_TOOL_XZDEC XZ_TOOL_LZMADEC XZ_TOOL_LZMAINFO XZ_TOOL_XZ XZ_TOOL_SCRIPTS XZ_TOOL_SYMLINKS
+            XZ_TOOL_SYMLINKS_LZMA XZ_DOC XZ_DOXYGEN XZ_NLS XZ_LZIP_DECODER XZ_MICROLZMA_ENCODER
+            XZ_MICROLZMA_DECODER BUILD_TESTING)
+  set(${opt} OFF CACHE BOOL "" FORCE)
+endforeach()
+set(XZ_THREADS no CACHE STRING "" FORCE)
+set(XZ_SMALL ON CACHE BOOL "" FORCE)  # LZMA-compressed TIFFs are rare: size over speed
+pixie_fetch(liblzma
+  https://github.com/tukaani-project/xz/releases/download/v5.8.4/xz-5.8.4.tar.gz
+  0014c7886930454fe8bd4228665b51af55eeae560ea135c9c4cd33f55b2591d9
+  OVERRIDE_FIND_PACKAGE)
+add_library(liblzma::liblzma ALIAS liblzma)
+# Few TIFFs use these codecs, and the engine module is downloaded on every
+# visit: in WebAssembly they are built for size (zstd with its own options
+# for that), not speed.
+if(EMSCRIPTEN)
+  target_compile_options(libzstd_static PRIVATE -Oz)
+  target_compile_definitions(libzstd_static PRIVATE ZSTD_NO_INLINE ZSTD_STRIP_ERROR_STRINGS
+                             HUF_FORCE_DECOMPRESS_X1 ZSTD_FORCE_DECOMPRESS_SEQUENCES_SHORT)
+  target_compile_options(liblzma PRIVATE -Oz)
+endif()
+# lzma.h is public only once installed; here it stays in the sources.
+target_include_directories(liblzma INTERFACE $<BUILD_INTERFACE:${liblzma_SOURCE_DIR}/src/liblzma/api>)
+set(LIBLZMA_FOUND TRUE)
+
+add_library(JPEG::JPEG ALIAS pixie_jpeg)
+set(JPEG_FOUND TRUE)
+set(JPEG_LIBRARIES JPEG::JPEG)
+set(HAVE_JPEGTURBO_DUAL_MODE_8 OFF CACHE BOOL "" FORCE)
+set(HAVE_JPEGTURBO_DUAL_MODE_12 OFF CACHE BOOL "" FORCE)
+
+add_library(WebP::webp ALIAS webp)
+set(WebP_INCLUDE_DIR ${libwebp_SOURCE_DIR}/src CACHE PATH "" FORCE)
+set(WebP_LIBRARY webp CACHE STRING "" FORCE)
+
+# win32-io: tiffio.h gives its users the POSIX I/O layer's handle type on Windows
+# too, so the library uses that layer as well and callbacks match their types.
+# Old-style JPEG (compression 6), JBIG and LERC stay out, as do codecs from
+# long-gone software (ThunderScan, NeXT, PixarLog, SGI LogLuv, Microsoft MDI).
+foreach(opt tiff-tools tiff-tests tiff-contrib tiff-docs tiff-install tiff-cxx tiff-deprecated
+            old-jpeg jpeg12 jbig lerc libdeflate ld-version-script win32-io thunder next pixarlog logluv mdi)
+  set(${opt} OFF CACHE BOOL "" FORCE)
+endforeach()
+foreach(opt tiff-static zlib jpeg zstd lzma webp)
+  set(${opt} ON CACHE BOOL "" FORCE)
+endforeach()
 pixie_fetch(libtiff
   https://download.osgeo.org/libtiff/tiff-4.7.2.tar.gz
-  672bd7d10aee4606171afb864f3570b83340f6a33e2c186dc0512f7145ffdf6a)
+  672bd7d10aee4606171afb864f3570b83340f6a33e2c186dc0512f7145ffdf6a
+  ${LIBTIFF_PATCH})
 add_library(pixie_tiff INTERFACE)
 target_link_libraries(pixie_tiff INTERFACE tiff)
+
+# --- HEIC: libheif with libde265 (HEVC decoding only, no plugins, no threads).
+# Both are LGPL-licensed; the web app builds them into a module of their own,
+# loaded only when a HEIC file needs it (see CMakeLists.txt).
+if(PIXIE_HEIF)
+  foreach(opt ENABLE_SDL ENABLE_DECODER ENABLE_ENCODER ENABLE_SHERLOCK265 ENABLE_INTERNAL_DEVELOPMENT_TOOLS
+              WITH_FUZZERS)
+    set(${opt} OFF CACHE BOOL "" FORCE)
+  endforeach()
+  # libde265's SIMD code is x86 SSE, which WebAssembly doesn't have.
+  if(EMSCRIPTEN)
+    set(ENABLE_SIMD OFF CACHE BOOL "" FORCE)
+  endif()
+  set(DE265_LOG_LEVEL none CACHE STRING "" FORCE)
+  pixie_fetch(libde265
+    https://github.com/strukturag/libde265/releases/download/v1.1.3/libde265-1.1.3.tar.gz
+    554228bd17788c99a7e63b37ab5634722190e6e2bf60c1dcb01cef328e133905
+    ${LIBDE265_PATCH})
+  # de265.h is in the sources, the de265-version.h it includes in the build tree.
+  target_include_directories(de265 INTERFACE $<BUILD_INTERFACE:${libde265_SOURCE_DIR}> $<BUILD_INTERFACE:${libde265_BINARY_DIR}>)
+  target_compile_definitions(de265 INTERFACE LIBDE265_STATIC_BUILD)
+  set(LIBDE265_INCLUDE_DIR ${libde265_BINARY_DIR} CACHE PATH "" FORCE)
+  set(LIBDE265_LIBRARY de265 CACHE STRING "" FORCE)
+
+  foreach(opt ENABLE_PLUGIN_LOADING ENABLE_MULTITHREADING_SUPPORT ENABLE_PARALLEL_TILE_DECODING
+              WITH_X265 WITH_KVAZAAR WITH_UVG266 WITH_VVDEC WITH_VVENC WITH_X264 WITH_OpenH264_DECODER
+              WITH_DAV1D WITH_AOM_DECODER WITH_AOM_ENCODER WITH_SvtEnc WITH_RAV1E WITH_JPEG_DECODER
+              WITH_JPEG_ENCODER WITH_OpenJPEG_ENCODER WITH_OpenJPEG_DECODER WITH_FFMPEG_DECODER
+              WITH_OPENJPH_ENCODER WITH_UNCOMPRESSED_CODEC WITH_WEBCODECS WITH_HEADER_COMPRESSION
+              WITH_LIBSHARPYUV WITH_EXAMPLES WITH_EXAMPLE_HEIF_THUMB WITH_EXAMPLE_HEIF_VIEW WITH_GDK_PIXBUF
+              BUILD_DOCUMENTATION WITH_LIBDE265_PLUGIN)
+    set(${opt} OFF CACHE BOOL "" FORCE)
+  endforeach()
+  set(WITH_LIBDE265 ON CACHE BOOL "" FORCE)
+  pixie_fetch(libheif
+    https://github.com/strukturag/libheif/releases/download/v1.23.6/libheif-1.23.6.tar.gz
+    4484346dc5995319dbc11e3a1c35d0a2ec46511ce370900869337fd2c7033125
+    ${LIBHEIF_PATCH})
+  target_compile_definitions(heif PUBLIC LIBHEIF_STATIC_BUILD)
+  # libheif reports errors through C++ exceptions, which the WebAssembly build
+  # otherwise leaves out: it gets WebAssembly's own exception handling, and so
+  # does the HEIC module that links it (see CMakeLists.txt).
+  if(EMSCRIPTEN)
+    target_compile_options(heif PRIVATE -fexceptions -fwasm-exceptions)
+  endif()
+  add_library(pixie_libheif INTERFACE)
+  target_link_libraries(pixie_libheif INTERFACE heif)
+  # libheif/heif.h is in the sources, the libheif/heif_version.h it includes in the build tree.
+  target_include_directories(pixie_libheif SYSTEM INTERFACE ${libheif_SOURCE_DIR}/libheif/api ${libheif_BINARY_DIR})
+endif()
 
 # --- Colour management: Little CMS, to convert to sRGB for formats that can't carry an ICC profile
 pixie_fetch(lcms2

@@ -7,6 +7,8 @@ import type { BuildInfo, ConvertTarget, CoreOptions, CoreResult, DecodedImage, D
 interface Pending {
   resolve: (value: unknown) => void;
   reject: (reason: Error) => void;
+  /** Stops listening to the request's abort signal. */
+  release?: () => void;
 }
 
 /** One engine worker. */
@@ -15,6 +17,8 @@ class WorkerClient {
   private nextId = 0;
   /** Set when the worker couldn't start (missing chunk, CSP, offline); later calls fail fast. */
   broken: Error | null = null;
+  /** Stopped to cancel a request: the pool drops it and starts another when needed. */
+  stopped = false;
   private worker: Worker;
 
   constructor(private readonly onSettled: () => void) {
@@ -42,6 +46,7 @@ class WorkerClient {
     const pending = this.pending.get(response.id);
     if (!pending) return;
     this.pending.delete(response.id);
+    pending.release?.();
     if ('error' in response) {
       pending.reject(new Error(response.error));
       // A WebAssembly trap leaves the module unusable: requests queued behind it
@@ -58,23 +63,48 @@ class WorkerClient {
   }
 
   private rejectAll(error: Error) {
-    for (const { reject } of this.pending.values()) reject(error);
+    for (const { reject, release } of this.pending.values()) {
+      release?.();
+      reject(error);
+    }
     this.pending.clear();
   }
 
-  call<T>(op: Operation, args: unknown[], transfer: Transferable[]): Promise<T> {
+  /**
+   * Sends a request. Aborting `signal` stops the worker mid-task (WebAssembly
+   * can't be interrupted otherwise), failing whatever else it was doing too.
+   */
+  call<T>(op: Operation, args: unknown[], transfer: Transferable[], signal?: AbortSignal): Promise<T> {
     if (this.broken) return Promise.reject(this.broken);
+    if (signal?.aborted) return Promise.reject(signal.reason as Error);
     const id = this.nextId++;
     return new Promise<T>((resolve, reject) => {
-      this.pending.set(id, { resolve: resolve as (value: unknown) => void, reject });
+      const abort = () => this.stop(signal!.reason as Error);
+      signal?.addEventListener('abort', abort, { once: true });
+      const release = signal ? () => signal.removeEventListener('abort', abort) : undefined;
+      this.pending.set(id, { resolve: resolve as (value: unknown) => void, reject, release });
       const request: Request = { id, op, args };
-      this.worker.postMessage(request, transfer);
+      try {
+        this.worker.postMessage(request, transfer);
+      } catch (error) {
+        // Not sent (such as a buffer already moved elsewhere): fail this request alone.
+        this.pending.delete(id);
+        release?.();
+        reject(error instanceof Error ? error : new Error(String(error)));
+        this.onSettled();
+      }
     });
   }
 
   terminate() {
-    this.rejectAll(new Error('The engine worker was stopped'));
+    this.stop(new Error('The engine worker was stopped'));
+  }
+
+  private stop(reason: Error) {
+    this.stopped = true;
+    this.rejectAll(reason);
     this.worker.terminate();
+    this.onSettled();
   }
 }
 
@@ -104,6 +134,7 @@ class EnginePool implements PixieApi {
   /** An idle worker, else a new one while the pool has room, else the least busy. */
   private pick(): WorkerClient {
     clearTimeout(this.idleTimer);
+    this.dropStopped();
     const live = this.workers.filter((worker) => !worker.broken);
     const idle = live.find((worker) => worker.load === 0);
     if (idle) return idle;
@@ -116,47 +147,58 @@ class EnginePool implements PixieApi {
     return (live.length > 0 ? live : this.workers).reduce((a, b) => (b.load < a.load ? b : a));
   }
 
+  private dropStopped() {
+    for (let i = this.workers.length - 1; i >= 0; i--) if (this.workers[i].stopped) this.workers.splice(i, 1);
+  }
+
   private settled() {
+    this.dropStopped();
     if (this.workers.length === 0 || this.workers.some((worker) => worker.load > 0)) return;
     clearTimeout(this.idleTimer);
     const extra = this.workers.length > 1;
     this.idleTimer = setTimeout(
       () => {
+        // Each stop settles the pool again, which sets the timer for the one left.
         for (const worker of this.workers.splice(extra ? 1 : 0)) worker.terminate();
-        if (extra) this.settled();
       },
       extra ? IDLE_MS : LAST_IDLE_MS,
     );
   }
 
   /** Sends `op`; `data` moves to the worker when `transfer` is set, rather than being copied. */
-  private call<T>(op: Operation, data: Uint8Array | undefined, transfer: boolean, ...rest: unknown[]): Promise<T> {
+  private call<T>(
+    op: Operation,
+    data: Uint8Array | undefined,
+    transfer: boolean,
+    signal: AbortSignal | undefined,
+    ...rest: unknown[]
+  ): Promise<T> {
     const args = data === undefined ? rest : [data, ...rest];
-    return this.pick().call<T>(op, args, transfer && data ? [data.buffer as ArrayBuffer] : []);
+    return this.pick().call<T>(op, args, transfer && data ? [data.buffer as ArrayBuffer] : [], signal);
   }
 
   info() {
-    return this.call<BuildInfo>('info', undefined, false);
+    return this.call<BuildInfo>('info', undefined, false, undefined);
   }
 
   detect(data: Uint8Array) {
-    return this.call<string>('detect', data, false);
+    return this.call<string>('detect', data, false, undefined);
   }
 
-  optimize(data: Uint8Array, options: CoreOptions = {}, transfer = false) {
-    return this.call<CoreResult>('optimize', data, transfer, options);
+  optimize(data: Uint8Array, options: CoreOptions = {}, transfer = false, signal?: AbortSignal) {
+    return this.call<CoreResult>('optimize', data, transfer, signal, options);
   }
 
-  convert(data: Uint8Array, target: ConvertTarget, options: CoreOptions = {}, transfer = false) {
-    return this.call<CoreResult>('convert', data, transfer, target, options);
+  convert(data: Uint8Array, target: ConvertTarget, options: CoreOptions = {}, transfer = false, signal?: AbortSignal) {
+    return this.call<CoreResult>('convert', data, transfer, signal, target, options);
   }
 
   decodeImage(data: Uint8Array, transfer = false) {
-    return this.call<DecodedImage>('decodeImage', data, transfer);
+    return this.call<DecodedImage>('decodeImage', data, transfer, undefined);
   }
 
   decodeMesh(data: Uint8Array, transfer = false) {
-    return this.call<DecodedMesh>('decodeMesh', data, transfer);
+    return this.call<DecodedMesh>('decodeMesh', data, transfer, undefined);
   }
 }
 

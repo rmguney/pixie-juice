@@ -1,0 +1,76 @@
+name: Fuzz
+
+# Nightly, apart from CI (whose job names Vercel waits on): the engine under
+# libFuzzer with ASan and UBSan, from a corpus kept between runs. See core/fuzz/README.md.
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: How long to fuzz
+        default: '30'
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    name: libFuzzer (ASan + UBSan)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: core
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # clang with its runtimes (libFuzzer, the sanitizers) as the fuzz preset expects.
+      - name: Install Ninja and clang
+        run: sudo apt-get update && sudo apt-get install -y ninja-build clang libclang-rt-dev
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            build/fuzz/_deps/*-src
+            build/fuzz/_deps/*-subbuild
+            build/fuzz/mozjpeg_ep-prefix/src/*.tar.gz
+          key: deps-fuzz-sources-${{ hashFiles('core/cmake/Dependencies.cmake', 'core/cmake/patches/**') }}
+          restore-keys: deps-fuzz-sources-
+      # The corpus grows run by run: restored from the latest run, saved under this
+      # one (also when a crash fails the run, so what it found isn't lost).
+      - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: build/fuzz-corpus
+          key: fuzz-corpus-${{ github.run_id }}
+          restore-keys: fuzz-corpus-
+      - name: Configure
+        run: cmake --preset fuzz
+      - name: Build
+        run: cmake --build --preset fuzz
+      - name: Fuzz
+        id: fuzz
+        run: |
+          mkdir -p ../build/fuzz-corpus ../build/fuzz-crashes
+          ../build/fuzz/pixie_fuzz_seeds ../build/fuzz-seeds
+          seconds=$(( ${{ github.event.inputs.minutes || 30 }} * 60 ))
+          cd ../build/fuzz-crashes
+          ../fuzz/pixie_fuzz -fork=2 -ignore_timeouts=1 -ignore_ooms=1 -timeout=60 -rss_limit_mb=3072 \
+            -max_len=262144 -max_total_time=$seconds ../fuzz-corpus ../fuzz-seeds
+      # Only inputs that add coverage are kept, so the corpus doesn't grow without end.
+      - name: Minimize the corpus
+        if: steps.fuzz.outcome == 'success' || steps.fuzz.outcome == 'failure'
+        run: |
+          mkdir -p ../build/fuzz-corpus-min
+          ../build/fuzz/pixie_fuzz -merge=1 -timeout=60 -rss_limit_mb=3072 -max_len=262144             ../build/fuzz-corpus-min ../build/fuzz-corpus
+          rm -rf ../build/fuzz-corpus
+          mv ../build/fuzz-corpus-min ../build/fuzz-corpus
+      - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        if: steps.fuzz.outcome == 'success' || steps.fuzz.outcome == 'failure'
+        with:
+          path: build/fuzz-corpus
+          key: fuzz-corpus-${{ github.run_id }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: failure()
+        with:
+          name: fuzz-crashes
+          path: build/fuzz-crashes
+          retention-days: 30

@@ -16,6 +16,8 @@ const FORMATS: Record<FormatName, OutputFormat> = {
   tiff: { extension: 'tiff', mimeType: 'image/tiff' },
   ico: { extension: 'ico', mimeType: 'image/x-icon' },
   svg: { extension: 'svg', mimeType: 'image/svg+xml' },
+  heic: { extension: 'heic', mimeType: 'image/heic' },
+  avif: { extension: 'avif', mimeType: 'image/avif' },
   obj: { extension: 'obj', mimeType: 'model/obj' },
   stl: { extension: 'stl', mimeType: 'model/stl' },
   ply: { extension: 'ply', mimeType: 'application/octet-stream' },

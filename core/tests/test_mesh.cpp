@@ -1,36 +1,15 @@
-#include "fixtures.hpp"
+#include "results.hpp"
 
 #include <cgltf.h>
 #include <doctest/doctest.h>
 
 using namespace pixie;
 using fixtures::as_text;
+using fixtures::lines_starting;
+using fixtures::optimized;
 using fixtures::text_bytes;
 
 namespace {
-
-/// The result file: the new data, or the input itself when nothing changed.
-Output optimized(const Bytes& input, Options options = {}) {
-  auto result = optimize(input, options);
-  REQUIRE(result.has_value());
-  if (!result->changed) {
-    CHECK(result->data.empty());
-    result->data = input;
-  }
-  return *result;
-}
-
-std::size_t lines_starting(const Bytes& data, std::string_view prefix) {
-  std::size_t n = 0;
-  const auto text = as_text(data);
-  for (std::size_t pos = 0; pos < text.size();) {
-    const auto end = text.find('\n', pos);
-    if (text.substr(pos).starts_with(prefix)) ++n;
-    if (end == std::string_view::npos) break;
-    pos = end + 1;
-  }
-  return n;
-}
 
 Bytes binary_stl(const detail::Mesh& mesh) { return detail::write_stl(mesh, {.binary = true}); }
 
@@ -190,6 +169,7 @@ TEST_CASE("decode_mesh shows files that optimize passes through") {
   auto geometry = decode_mesh(obj);
   REQUIRE(geometry.has_value());
   CHECK(geometry->indices.size() == 6);
+  CHECK(geometry->lines.size() == 2);  // the polyline's one segment
   CHECK(geometry->colors.empty());
 
   const auto ply = text_bytes(
@@ -211,11 +191,106 @@ TEST_CASE("decode_mesh shows files that optimize passes through") {
   CHECK(geometry->indices.size() == 2 * 2 * 2 * 3);
 }
 
-TEST_CASE("decode_mesh refuses what has nothing to show") {
-  CHECK_FALSE(decode_mesh(text_bytes("v 0 0 0\nv 1 0 0\nv 0 1 0\n")).has_value());  // a point cloud
+TEST_CASE("decode_mesh shows point clouds and lines, and refuses what has nothing to show") {
+  auto cloud = decode_mesh(text_bytes("v 0 0 0 1 0 0\nv 1 0 0 0 1 0\nv 0 1 0 0 0 1\n"));
+  REQUIRE(cloud.has_value());
+  CHECK(cloud->positions == std::vector<float>{0, 0, 0, 1, 0, 0, 0, 1, 0});
+  CHECK(cloud->colors == std::vector<float>{1, 0, 0, 0, 1, 0, 0, 0, 1});
+  CHECK(cloud->indices.empty());
+  CHECK(cloud->lines.empty());
+
+  auto ply = decode_mesh(text_bytes("ply\nformat ascii 1.0\nelement vertex 2\nproperty float x\nproperty float y\n"
+                                    "property float z\nend_header\n0 0 0\n1 1 1\n"));
+  REQUIRE(ply.has_value());
+  CHECK(ply->positions.size() == 6);
+  CHECK(ply->indices.empty());
+
+  auto wire = decode_mesh(text_bytes("v 0 0 0\nv 1 0 0\nv 1 1 0\nl 1 2 3\n"));
+  REQUIRE(wire.has_value());
+  CHECK(wire->indices.empty());
+  REQUIRE(wire->lines.size() == 4);  // two segments
+  CHECK(wire->positions.size() == 3 * 3);  // the polyline's three corners, the middle one shared
+  CHECK(std::vector<std::uint32_t>(wire->lines.begin(), wire->lines.end()) == std::vector<std::uint32_t>{0, 1, 1, 2});
+
+  CHECK_FALSE(decode_mesh(text_bytes("# nothing\no empty\n")).has_value());
   CHECK_FALSE(decode_mesh(text_bytes(
                   "solid s\nfacet normal 0 0 1\nouter loop\nvertex nan 0 0\nvertex 1 0 0\nvertex 0 1 0\n"
                   "endloop\nendfacet\nendsolid s\n"))
                   .has_value());
   CHECK_FALSE(decode_mesh(fixtures::grid_gltf(2)).has_value());  // glTF is displayed by three.js
+}
+
+namespace {
+
+/// grid_gltf with its buffer in a file of its own, "grid data.bin" (percent-encoded in the URI).
+std::pair<Bytes, Bytes> gltf_with_bin(std::string_view extra = "") {
+  const auto source = fixtures::grid_gltf(4);
+  const auto embedded = as_text(source);
+  const std::string prefix = "\"uri\":\"data:application/octet-stream;base64,";
+  const auto start = embedded.find(prefix) + prefix.size();
+  const auto end = embedded.find('"', start);
+  // The buffer's bytes, decoded from the data URI.
+  const std::string_view base64 = embedded.substr(start, end - start);
+  Bytes bin;
+  std::uint32_t bits = 0;
+  int count = 0;
+  for (const char c : base64) {
+    if (c == '=') break;
+    const auto value = std::string_view("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/").find(c);
+    bits = bits << 6 | std::uint32_t(value);
+    if ((count += 6) >= 8) {
+      count -= 8;
+      bin.push_back(std::uint8_t(bits >> count));
+    }
+  }
+  std::string json(embedded.substr(0, start - prefix.size()));
+  json += "\"uri\":\"grid%20data.bin\"";
+  json += embedded.substr(end + 1);
+  json.insert(json.rfind('}'), extra);
+  return {text_bytes(json), bin};
+}
+
+}  // namespace
+
+TEST_CASE("glTF: the files a .gltf refers to are packed into the GLB") {
+  const auto [gltf, bin] = gltf_with_bin();
+  CHECK_FALSE(optimize(gltf, {}).has_value());  // without its buffer
+
+  const Resource resources[] = {{"grid data.bin", bin}};
+  const auto out = optimize(gltf, {}, resources);
+  REQUIRE(out.has_value());
+  CHECK(out->changed);
+  CHECK(out->format == Format::Glb);
+
+  // A texture found by its file name, under a folder in the URI, ends up inside the GLB.
+  const auto png = *detail::encode_png(fixtures::make_image(8, 8, 0));
+  const auto [textured, buffer] = gltf_with_bin(
+      ",\"images\":[{\"uri\":\"textures/wood.png\"}],\"textures\":[{\"source\":0}],"
+      "\"materials\":[{\"pbrMetallicRoughness\":{\"baseColorTexture\":{\"index\":0}}}]");
+  const Resource both[] = {{"grid data.bin", buffer}, {"wood.png", png}};
+  const auto packed = optimize(textured, {}, both);
+  REQUIRE(packed.has_value());
+  CHECK(packed->format == Format::Glb);
+  const std::string_view glb = as_text(packed->data);
+  CHECK(glb.find("\x89PNG") != std::string_view::npos);
+  CHECK(glb.find("wood.png") == std::string_view::npos);  // no file reference left
+
+  const Resource just_buffer[] = {{"grid data.bin", buffer}};
+  const auto missing = optimize(textured, {}, just_buffer);
+  REQUIRE_FALSE(missing.has_value());
+  CHECK(missing.error().message.find("wood.png") != std::string::npos);
+}
+
+TEST_CASE("glTF: a URI that leaves the folder is refused") {
+  for (const char* uri : {"../secret.bin", "/etc/passwd", "C:/x.bin", "a/../../b.bin"}) {
+    CAPTURE(std::string(uri));
+    auto [gltf, bin] = gltf_with_bin();
+    std::string json(as_text(gltf));
+    const auto at = json.find("grid%20data.bin");
+    json.replace(at, std::strlen("grid%20data.bin"), uri);
+    const Resource resources[] = {{"secret.bin", bin}, {"passwd", bin}, {"x.bin", bin}, {"b.bin", bin}};
+    const auto out = optimize(text_bytes(json), {}, resources);
+    REQUIRE_FALSE(out.has_value());
+    CHECK(out.error().message.find("outside its folder") != std::string::npos);
+  }
 }

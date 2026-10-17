@@ -75,6 +75,7 @@ test('compares images the engine decodes for display', async ({ page }) => {
   await openApp(page);
   const bytes = await page.evaluate(() => Array.from(window.testing.uncompressedTiff(64, 48)));
   await page.locator('#file-input').setInputFiles({ name: 'scan.tif', mimeType: 'image/tiff', buffer: Buffer.from(bytes) });
+  await expect(page.getByRole('img', { name: 'Preview of scan.tif' })).toHaveJSProperty('width', 64);
   await page.getByRole('button', { name: 'Optimize 1 file' }).click();
   await expect(page.getByRole('img', { name: 'Preview of scan.tif' })).toBeVisible();
   await expect(page.getByRole('img', { name: 'Preview of scan_juice.tiff' })).toBeVisible();
@@ -144,6 +145,75 @@ test('changing the file list during a run stops it without results', async ({ pa
   expect(seen.calls).toBeLessThan(names.length);
 });
 
+test('Cancel stops a run, the files in progress too, and keeps what finished', async ({ page }) => {
+  await openApp(page);
+  const png = await page.evaluate(async () =>
+    Array.from(await window.testing.makeImage({ width: 300, height: 300, mime: 'image/png', noise: 60 })),
+  );
+  const names = Array.from({ length: 10 }, (_, i) => `photo-${i}.png`);
+  await page
+    .locator('#file-input')
+    .setInputFiles(names.map((name) => ({ name, mimeType: 'image/png', buffer: Buffer.from(png) })));
+  await page.evaluate(() => {
+    const seen = { calls: 0 };
+    (window as unknown as { seen: typeof seen }).seen = seen;
+    const api = window.pixieJuice!;
+    const optimize = api.optimize.bind(api);
+    api.optimize = (...args) => {
+      seen.calls++;
+      return optimize(...args);
+    };
+  });
+
+  await page.getByRole('button', { name: 'Optimize 10 files' }).click();
+  await expect(page.getByRole('progressbar', { name: 'Processing progress' })).toBeVisible();
+  await page.getByRole('button', { name: 'Cancel' }).click();
+
+  // Back right away (the files in progress were stopped, not awaited), with nothing new started.
+  await expect(page.getByRole('progressbar', { name: 'Processing progress' })).toBeHidden({ timeout: 5_000 });
+  const calls = await page.evaluate(() => (window as unknown as { seen: { calls: number } }).seen.calls);
+  expect(calls).toBeLessThan(names.length);
+  const results = page.getByRole('heading', { name: 'Results' });
+  if (await results.isVisible()) {
+    await expect(page.getByText(/not processed \(cancelled\)/)).toBeVisible();
+  } else {
+    await expect(page.getByRole('button', { name: 'Optimize 10 files' })).toBeVisible();
+  }
+  // The engine still works afterwards.
+  const after = await page.evaluate(async (bytes) => (await window.pixieJuice!.optimize(new Uint8Array(bytes))).format, png);
+  expect(after).toBe('png');
+});
+
+test('Resize appears for images and reaches the engine', async ({ page }) => {
+  await openApp(page);
+  await page.locator('#file-input').setInputFiles({ name: 'tri.obj', mimeType: 'text/plain', buffer: Buffer.from('v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n') });
+  await expect(page.getByLabel('Resize')).toHaveCount(0);
+  await uploadPng(page, 'wide.png');
+  await page.getByLabel('Resize').selectOption('512');
+  await page.evaluate(() => {
+    const api = window.pixieJuice!;
+    const optimize = api.optimize.bind(api);
+    api.optimize = (data, options, ...rest) => {
+      (window as unknown as { maxSize?: number }).maxSize = options?.maxSize;
+      return optimize(data, options, ...rest);
+    };
+  });
+  await page.getByRole('button', { name: 'Optimize 2 files' }).click();
+  await expect(page.getByRole('heading', { name: 'Results' })).toBeVisible();
+  expect(await page.evaluate(() => (window as unknown as { maxSize?: number }).maxSize)).toBe(512);
+});
+
+test('a .bin goes with the .gltf that uses it, not on its own', async ({ page }) => {
+  await openApp(page);
+  await page.locator('#file-input').setInputFiles([
+    { name: 'scene.bin', mimeType: 'application/octet-stream', buffer: Buffer.alloc(16) },
+    { name: 'photo.png', mimeType: 'image/png', buffer: Buffer.from(await page.evaluate(async () => Array.from(await window.testing.makeImage({ width: 20, height: 20, mime: 'image/png' })))) },
+  ]);
+  await expect(page.getByRole('button', { name: 'Preview scene.bin' })).toBeVisible();
+  await expect(page.getByRole('list', { name: 'Selected files' }).getByText(/for a \.gltf/)).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Optimize 1 file' })).toBeVisible();
+});
+
 test('processes several files at once, results in list order', async ({ page }) => {
   await openApp(page);
   const concurrency = await page.evaluate(() => window.pixieJuice!.concurrency);
@@ -171,18 +241,43 @@ test('processes several files at once, results in list order', async ({ page }) 
   expect(most).toBe(Math.min(concurrency, names.length));
 });
 
-test('Download all saves every result under its own name', async ({ page }) => {
+/** The entries of a ZIP file, read from its central directory, with their stored data. */
+function unzip(zip: Buffer): { name: string; data: Buffer; crc: number }[] {
+  const end = zip.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
+  const count = zip.readUInt16LE(end + 10);
+  let at = zip.readUInt32LE(end + 16);
+  const entries = [];
+  for (let i = 0; i < count; i++) {
+    expect(zip.readUInt32LE(at)).toBe(0x02014b50);
+    expect(zip.readUInt16LE(at + 10)).toBe(0); // stored
+    const crc = zip.readUInt32LE(at + 16);
+    const size = zip.readUInt32LE(at + 20);
+    const nameLength = zip.readUInt16LE(at + 28);
+    const name = zip.subarray(at + 46, at + 46 + nameLength).toString('utf8');
+    const local = zip.readUInt32LE(at + 42);
+    const start = local + 30 + zip.readUInt16LE(local + 26) + zip.readUInt16LE(local + 28);
+    entries.push({ name, data: zip.subarray(start, start + size), crc });
+    at += 46 + nameLength;
+  }
+  return entries;
+}
+
+test('Download all saves every result in one ZIP, each under its own name', async ({ page }) => {
   await openApp(page);
   await uploadPng(page, 'first.png');
   await uploadPng(page, 'second.png');
   await page.getByRole('button', { name: 'Optimize 2 files' }).click();
   await expect(page.getByRole('heading', { name: 'Results' })).toBeVisible();
 
-  const names: string[] = [];
-  page.on('download', (download) => names.push(download.suggestedFilename()));
-  await page.getByRole('button', { name: 'Download all' }).click();
-  await expect.poll(() => names.length).toBe(2);
-  expect(names.sort()).toEqual(['first_juice.png', 'second_juice.png']);
+  const download = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Download all (ZIP)' }).click();
+  expect((await download).suggestedFilename()).toBe('pixie-juice.zip');
+  const entries = unzip(readFileSync((await (await download).path())!));
+  expect(entries.map((entry) => entry.name).sort()).toEqual(['first_juice.png', 'second_juice.png']);
+  for (const entry of entries) {
+    expect(crc32(entry.data) >>> 0).toBe(entry.crc);
+    expect(entry.data.subarray(0, 4).toString('latin1')).toBe('\x89PNG');
+  }
 });
 
 test('Lossless refuses a conversion that would change pixels', async ({ page }) => {
@@ -262,11 +357,22 @@ test('a file added again under the same name replaces the listed one', async ({ 
   await expect(page.getByRole('list', { name: 'Selected files' })).toContainText('48 B');
 });
 
-test('previews TIFF through the engine decoder', async ({ page }) => {
+test('pasting adds files, and a second pasted "image.png" gets a name of its own', async ({ page }) => {
   await openApp(page);
-  const bytes = await page.evaluate(() => Array.from(window.testing.uncompressedTiff(64, 48)));
-  await page.locator('#file-input').setInputFiles({ name: 'scan.tif', mimeType: 'image/tiff', buffer: Buffer.from(bytes) });
-  await expect(page.getByRole('img', { name: 'Preview of scan.tif' })).toHaveJSProperty('width', 64);
+  const paste = () =>
+    page.evaluate(async () => {
+      const png = await window.testing.makeImage({ width: 40, height: 30, mime: 'image/png' });
+      const data = new DataTransfer();
+      data.items.add(new File([png as BlobPart], 'image.png', { type: 'image/png' }));
+      const event = new Event('paste', { bubbles: true, cancelable: true });
+      Object.defineProperty(event, 'clipboardData', { value: data });
+      document.body.dispatchEvent(event);
+    });
+  await paste();
+  await expect(page.getByRole('button', { name: 'Preview image.png' })).toBeVisible();
+  await paste();
+  await expect(page.getByRole('button', { name: 'Preview image-2.png' })).toBeVisible();
+  await expect(page.getByRole('list', { name: 'Selected files' }).getByRole('listitem')).toHaveCount(2);
 });
 
 test('shows the mesh detail control only for meshes', async ({ page }) => {

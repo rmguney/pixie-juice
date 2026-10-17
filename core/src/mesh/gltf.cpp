@@ -47,24 +47,53 @@ constexpr std::array<std::string_view, 22> kCarriedExtensions{
     "KHR_materials_variants", "KHR_lights_punctual", "KHR_texture_basisu", "EXT_texture_webp",
     "EXT_mesh_gpu_instancing"};
 
-/// Whether gltfpack can take the file: it must parse, its resources must all be
-/// embedded (GLB chunk or data: URI; gltfpack resolves any other URI against the
-/// input's directory, which natively reads the local file system), and every
-/// extension it uses must be one gltfpack carries (false: pass it through).
-Result<bool> packable(ByteView data) {
-  const cgltf_options options{};
-  cgltf_data* parsed = nullptr;
-  if (cgltf_parse(&options, data.data(), data.size(), &parsed) != cgltf_result_success) {
-    return fail("Invalid glTF");
+/// A file the glTF refers to, at the path (relative to the glTF) gltfpack reads it from.
+struct Staged {
+  std::string path;
+  ByteView data;
+};
+
+/// What gltfpack needs besides the file: the files its URIs name, found among
+/// `resources` by path or file name. A URI that would leave the directory is
+/// refused; one no resource matches fails, naming the file.
+Result<std::vector<Staged>> staged_resources(const cgltf_data& parsed, std::span<const Resource> resources) {
+  std::vector<Staged> staged;
+  auto stage = [&](const char* uri) -> std::optional<Error> {
+    if (!uri || std::strncmp(uri, "data:", 5) == 0) return std::nullopt;
+    std::string path(uri);
+    cgltf_decode_uri(path.data());
+    path.resize(std::strlen(path.c_str()));
+    std::replace(path.begin(), path.end(), '\\', '/');
+    const bool escapes = path.empty() || path.front() == '/' || path.find(':') != std::string::npos ||
+                         path == ".." || path.starts_with("../") || path.find("/../") != std::string::npos ||
+                         path.ends_with("/..");
+    if (escapes) return Error{"The glTF refers to a file outside its folder: " + path};
+    const std::string_view file_name = std::string_view(path).substr(path.rfind('/') + 1);
+    const Resource* match = nullptr;
+    for (const Resource& resource : resources) {
+      if (resource.name == path) match = &resource;
+    }
+    for (const Resource& resource : resources) {
+      if (!match && resource.name == file_name) match = &resource;
+    }
+    if (!match) return Error{"The glTF needs " + std::string(file_name) + "; add it with the .gltf"};
+    const bool seen = std::any_of(staged.begin(), staged.end(), [&](const Staged& s) { return s.path == path; });
+    if (!seen) staged.push_back({std::move(path), match->data});
+    return std::nullopt;
+  };
+  for (cgltf_size i = 0; i < parsed.buffers_count; ++i) {
+    if (auto error = stage(parsed.buffers[i].uri)) return std::unexpected(*error);
   }
-  const std::unique_ptr<cgltf_data, decltype(&cgltf_free)> owner(parsed, cgltf_free);
-  auto external = [](const char* uri) { return uri && std::strncmp(uri, "data:", 5) != 0; };
-  bool references_files = false;
-  for (cgltf_size i = 0; i < parsed->buffers_count; ++i) references_files |= external(parsed->buffers[i].uri);
-  for (cgltf_size i = 0; i < parsed->images_count; ++i) references_files |= external(parsed->images[i].uri);
-  if (references_files) return fail("glTF references external files; use GLB or embedded data");
-  for (cgltf_size i = 0; i < parsed->extensions_used_count; ++i) {
-    const std::string_view name = parsed->extensions_used[i];
+  for (cgltf_size i = 0; i < parsed.images_count; ++i) {
+    if (auto error = stage(parsed.images[i].uri)) return std::unexpected(*error);
+  }
+  return staged;
+}
+
+/// Whether every extension the file uses is one gltfpack carries (false: pass it through).
+bool packable(const cgltf_data& parsed) {
+  for (cgltf_size i = 0; i < parsed.extensions_used_count; ++i) {
+    const std::string_view name = parsed.extensions_used[i];
     if (std::find(kCarriedExtensions.begin(), kCarriedExtensions.end(), name) == kCarriedExtensions.end()) {
       return false;
     }
@@ -114,14 +143,28 @@ class CLocaleScope {
 
 }  // namespace
 
-Result<std::optional<Bytes>> optimize_gltf(ByteView data, Format format, const Options& options) {
-  const auto accepted = packable(data);
-  if (!accepted) return std::unexpected(accepted.error());
-  if (!*accepted) return std::optional<Bytes>{};
+Result<std::optional<Bytes>> optimize_gltf(ByteView data, Format format, const Options& options,
+                                           std::span<const Resource> resources) {
+  const cgltf_options parse_options{};
+  cgltf_data* parsed = nullptr;
+  if (cgltf_parse(&parse_options, data.data(), data.size(), &parsed) != cgltf_result_success) {
+    return fail("Invalid glTF");
+  }
+  const std::unique_ptr<cgltf_data, decltype(&cgltf_free)> owner(parsed, cgltf_free);
+  // gltfpack reads the files a glTF refers to from beside it: they are staged
+  // in a directory of their own (natively, nothing else on disk is ever read).
+  const auto staged = staged_resources(*parsed, resources);
+  if (!staged) return std::unexpected(staged.error());
+  if (!packable(*parsed)) return std::optional<Bytes>{};
 
-  TempFile input(format == Format::Glb ? ".glb" : ".gltf");
+  const TempDir directory;
+  const std::string input_name = format == Format::Glb ? "input.glb" : "input.gltf";
+  if (!directory.write(input_name, data)) return fail("Could not stage glTF input");
+  for (const Staged& file : *staged) {
+    if (!directory.write(file.path, file.data)) return fail("Could not stage " + file.path);
+  }
+  const std::string input = directory.path() + "/" + input_name;
   TempFile output(".glb");
-  if (!input.write(data)) return fail("Could not stage glTF input");
 
   Settings settings = defaults();
   settings.keep_nodes = true;
@@ -138,12 +181,17 @@ Result<std::optional<Bytes>> optimize_gltf(ByteView data, Format format, const O
 
   {
     const CLocaleScope c_locale;
-    if (const int code = gltfpack(input.path().c_str(), output.path().c_str(), nullptr, settings); code != 0) {
+    if (const int code = gltfpack(input.c_str(), output.path().c_str(), nullptr, settings); code != 0) {
       return fail("gltfpack could not process this file (code " + std::to_string(code) + ")");
     }
   }
   auto bytes = output.read();
   if (!bytes || bytes->empty()) return fail("gltfpack produced no output");
+  // gltfpack restructures the file, so it is accepted on size, against the file
+  // together with what it uses; it keeps every primitive.
+  std::size_t original = data.size();
+  for (const Staged& file : *staged) original += file.data.size();
+  if (bytes->size() >= original) return std::optional<Bytes>{};
   return std::optional<Bytes>(std::move(*bytes));
 }
 

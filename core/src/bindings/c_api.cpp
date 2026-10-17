@@ -33,7 +33,8 @@ pixie::ByteView view(const std::uint8_t* data, std::size_t size) {
 
 pixie::Options to_options(const pixie_options* options) {
   if (!options) return {};
-  return {options->quality, options->lossless != 0, options->preserve_metadata != 0, options->mesh_ratio};
+  return {options->quality, options->lossless != 0, options->preserve_metadata != 0, options->mesh_ratio,
+          options->max_size};
 }
 
 /// Format names are string literals, so their views are NUL-terminated.
@@ -78,7 +79,7 @@ extern "C" {
 
 pixie_options pixie_default_options(void) {
   const pixie::Options defaults;
-  return {defaults.quality, defaults.lossless, defaults.preserve_metadata, defaults.mesh_ratio};
+  return {defaults.quality, defaults.lossless, defaults.preserve_metadata, defaults.mesh_ratio, defaults.max_size};
 }
 
 const char* pixie_detect(const std::uint8_t* data, std::size_t size) {
@@ -120,6 +121,8 @@ pixie_mesh pixie_decode_mesh(const std::uint8_t* data, std::size_t size) {
                            out.vertex_count = g.positions.size() / 3;
                            out.indices = g.indices.data();
                            out.index_count = g.indices.size();
+                           out.lines = g.lines.empty() ? nullptr : g.lines.data();
+                           out.line_index_count = g.lines.size();
                          });
 }
 

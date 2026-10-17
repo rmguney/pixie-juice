@@ -1,9 +1,11 @@
 import type { MeshFormat } from '../core/types';
 
-type FileKind = 'image' | 'mesh';
+type FileKind = 'image' | 'mesh' | 'resource';
 
-export const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'tga', 'tif', 'tiff', 'ico', 'svg'] as const;
+export const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'tga', 'tif', 'tiff', 'ico', 'svg', 'heic', 'heif', 'avif'] as const;
 export const MESH_EXTENSIONS = ['obj', 'stl', 'ply', 'gltf', 'glb', 'fbx'] as const satisfies readonly MeshFormat[];
+/** Files that only a .gltf in the list uses (its buffers); images can serve one too. */
+export const RESOURCE_EXTENSIONS = ['bin'] as const;
 
 export function extensionOf(name: string): string {
   const dot = name.lastIndexOf('.');
@@ -15,11 +17,12 @@ export function isMeshExtension(extension: string): extension is MeshFormat {
   return (MESH_EXTENSIONS as readonly string[]).includes(extension);
 }
 
-/** Image or mesh by extension; null for anything Pixie Juice doesn't handle. */
+/** Image, mesh or a glTF's resource by extension; null for anything Pixie Juice doesn't handle. */
 export function fileKind(name: string): FileKind | null {
   const extension = extensionOf(name);
   if ((IMAGE_EXTENSIONS as readonly string[]).includes(extension)) return 'image';
   if (isMeshExtension(extension)) return 'mesh';
+  if ((RESOURCE_EXTENSIONS as readonly string[]).includes(extension)) return 'resource';
   return null;
 }
 

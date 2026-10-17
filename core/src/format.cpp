@@ -20,16 +20,14 @@ constexpr std::array kNames{
     NamedFormat{Format::WebP, "webp"}, NamedFormat{Format::Gif, "gif"},
     NamedFormat{Format::Bmp, "bmp"},   NamedFormat{Format::Tga, "tga"},
     NamedFormat{Format::Tiff, "tiff"}, NamedFormat{Format::Ico, "ico"},
-    NamedFormat{Format::Svg, "svg"},   NamedFormat{Format::Obj, "obj"},
+    NamedFormat{Format::Svg, "svg"},   NamedFormat{Format::Heic, "heic"},
+    NamedFormat{Format::Avif, "avif"}, NamedFormat{Format::Obj, "obj"},
     NamedFormat{Format::Stl, "stl"},   NamedFormat{Format::Ply, "ply"},
     NamedFormat{Format::Gltf, "gltf"}, NamedFormat{Format::Glb, "glb"},
     NamedFormat{Format::Fbx, "fbx"},
 };
 
-bool starts_with(ByteView data, std::string_view prefix) {
-  return data.size() >= prefix.size() &&
-         std::memcmp(data.data(), prefix.data(), prefix.size()) == 0;
-}
+using detail::starts_with;
 
 std::uint32_t le32(ByteView data, std::size_t at) {
   return std::uint32_t(data[at]) | std::uint32_t(data[at + 1]) << 8 |
@@ -42,6 +40,29 @@ std::string_view text_prefix(ByteView data, std::size_t limit = 4096) {
   const auto* begin = reinterpret_cast<const char*>(data.data());
   if (std::find(begin, begin + n, '\0') != begin + n) return {};
   return {begin, n};
+}
+
+/// HEIC or AVIF by the brands in an ISO base media file's ftyp box (the major
+/// brand first); Unknown for other files of that family, such as MP4 video.
+Format heif_brand(ByteView data) {
+  if (data.size() < 16 || std::memcmp(data.data() + 4, "ftyp", 4) != 0) return Format::Unknown;
+  const auto box = std::size_t(std::min<std::uint64_t>(detail::be32(data.data()), data.size()));
+  auto brand_at = [&](std::size_t at) { return std::string_view(reinterpret_cast<const char*>(data.data()) + at, 4); };
+  auto classify = [](std::string_view brand) {
+    if (brand == "avif" || brand == "avis") return Format::Avif;
+    for (std::string_view heic : {"heic", "heix", "heim", "heis", "hevc", "hevx"}) {
+      if (brand == heic) return Format::Heic;
+    }
+    return Format::Unknown;
+  };
+  if (const Format major = classify(brand_at(8)); major != Format::Unknown) return major;
+  // The compact 'mif3' layout keeps the image's brand where the minor version would be.
+  if (brand_at(8) == "mif3") return classify(brand_at(12));
+  // Then the compatible brands, after the major brand and the minor version.
+  for (std::size_t at = 16; at + 4 <= box; at += 4) {
+    if (const Format compatible = classify(brand_at(at)); compatible != Format::Unknown) return compatible;
+  }
+  return Format::Unknown;
 }
 
 std::string_view skip_space(std::string_view text) {
@@ -84,11 +105,16 @@ bool looks_like_obj(std::string_view text) {
 
 }  // namespace
 
+bool detail::is_ascii_stl(ByteView data) {
+  const auto text = skip_space(text_prefix(data));
+  return text.starts_with("solid") && text.find("facet") != std::string_view::npos;
+}
+
 Kind kind_of(Format format) {
   switch (format) {
     case Format::Png: case Format::Jpeg: case Format::WebP: case Format::Gif:
     case Format::Bmp: case Format::Tga: case Format::Tiff: case Format::Ico:
-    case Format::Svg:
+    case Format::Svg: case Format::Heic: case Format::Avif:
       return Kind::Image;
     case Format::Obj: case Format::Stl: case Format::Ply: case Format::Gltf:
     case Format::Glb: case Format::Fbx:
@@ -109,6 +135,7 @@ std::string_view format_name(Format format) {
 Format format_from_name(std::string_view name) {
   if (name == "jpg") return Format::Jpeg;
   if (name == "tif") return Format::Tiff;
+  if (name == "heif" || name == "hif") return Format::Heic;
   for (const auto& entry : kNames) {
     if (entry.name == name) return entry.format;
   }
@@ -129,6 +156,7 @@ Format detect(ByteView data) {
   if (starts_with(data, "glTF")) return Format::Glb;
   if (starts_with(data, "ply\n") || starts_with(data, "ply\r\n")) return Format::Ply;
   if (starts_with(data, "Kaydara FBX Binary")) return Format::Fbx;
+  if (const Format heif = heif_brand(data); heif != Format::Unknown) return heif;
 
   if (data.size() >= 26 && starts_with(data, "BM")) {
     // DIB header sizes of BITMAPCOREHEADER .. BITMAPV5HEADER.
@@ -162,7 +190,7 @@ Format detect(ByteView data) {
       const std::string_view whole(reinterpret_cast<const char*>(data.data()), data.size());
       if (whole.find("\"asset\"") != std::string_view::npos) return Format::Gltf;
     }
-    if (text.starts_with("solid") && text.find("facet") != std::string_view::npos) return Format::Stl;
+    if (detail::is_ascii_stl(data)) return Format::Stl;
     if (text.starts_with("; FBX")) return Format::Fbx;
     if (looks_like_obj(text)) return Format::Obj;
   }

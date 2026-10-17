@@ -9,6 +9,8 @@ interface EmbindModule {
   detect(_0: any): string;
   decodeImage(_0: any): any;
   decodeMesh(_0: any): any;
+  convertPixels(_0: any, _1: number, _2: number, _3: any, _4: EmbindString, _5: any): any;
+  toSrgb(_0: any, _1: number, _2: number, _3: any): any;
   version(): string;
   buildTimestamp(): string;
   buildSource(): string;

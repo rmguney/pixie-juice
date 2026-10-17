@@ -25,6 +25,12 @@ Options normalized(const Options& options) {
 
 Output unchanged(Format format) { return Output{{}, format, false}; }
 
+/// BMP and TGA have no useful compression of their own: PNG (lossless) or, for
+/// opaque images below quality 85, JPEG.
+Format bmp_tga_target(const Image& image, const Options& options) {
+  return !options.lossless && options.quality < 85 && !image.has_alpha() ? Format::Jpeg : Format::Png;
+}
+
 std::vector<Bytes> image_candidates(ByteView input, Format format, const Image& image, const Options& options) {
   switch (format) {
     case Format::Jpeg: return jpeg_candidates(input, image, options);
@@ -32,14 +38,12 @@ std::vector<Bytes> image_candidates(ByteView input, Format format, const Image& 
     case Format::WebP: return webp_candidates(input, image, options);
     case Format::Gif: return gif_candidates(input, options);
     case Format::Ico: return ico_candidates(input, options);
-    case Format::Tiff: return tiff_candidates(input, options);
+    case Format::Tiff: return tiff_candidates(input, image, options);
     case Format::Bmp:
     case Format::Tga: {
-      // No useful compression of their own: re-encode as PNG (lossless) or,
-      // for opaque images below quality 85, JPEG.
       std::vector<Bytes> out;
       if (auto png = encode_png(image)) out.push_back(std::move(*png));
-      if (!options.lossless && options.quality < 85 && !image.has_alpha()) {
+      if (bmp_tga_target(image, options) == Format::Jpeg) {
         if (auto jpeg = encode_jpeg(image, options.quality)) out.push_back(std::move(*jpeg));
       }
       return out;
@@ -48,17 +52,95 @@ std::vector<Bytes> image_candidates(ByteView input, Format format, const Image& 
   }
 }
 
+bool is_conversion_target(Format target) {
+  switch (target) {
+    case Format::Png: case Format::Jpeg: case Format::WebP: case Format::Gif:
+    case Format::Bmp: case Format::Tga: case Format::Ico: case Format::Tiff: return true;
+    default: return false;
+  }
+}
+
+/// Dimensions within the decoders' cap, matched by the RGBA data.
+bool valid_pixels(const Pixels& pixels) {
+  return pixels_in_range(pixels.width, pixels.height) &&
+         pixels.rgba.size() == std::uint64_t(pixels.width) * pixels.height * 4;
+}
+
+/// The second half of a conversion: scales upright pixels described by `icc`
+/// to the size asked for, then encodes them.
+Result<Output> encode_converted(Image& image, Bytes icc, Format target, const Options& settings) {
+  if (!fit_within(image, settings.max_size)) return fail("Resizing the image failed");
+  // Only an RGB profile describes the decoded RGB pixels, and only PNG, JPEG,
+  // WebP and TIFF can carry it. Otherwise the profile is applied to the pixels
+  // (RGB and grey profiles); a CMYK profile no longer fits pixels already
+  // turned into RGB, so it is dropped with them left as decoded.
+  const bool embeds_icc = icc_colour_space(icc) == "RGB " &&
+                          (target == Format::Png || target == Format::Jpeg || target == Format::WebP ||
+                           target == Format::Tiff);
+  if (!embeds_icc && !icc.empty()) {
+    convert_to_srgb(image, icc);
+    icc.clear();
+  }
+
+  Result<Bytes> encoded = fail("Unsupported conversion target");
+  switch (target) {
+    case Format::Png: encoded = encode_png(image, icc); break;
+    case Format::Jpeg: encoded = encode_jpeg(image, settings.quality, icc); break;
+    case Format::WebP:
+      encoded = encode_webp(image, settings.quality, settings.lossless || settings.quality == 100, icc);
+      break;
+    case Format::Tiff: encoded = encode_tiff(image, icc); break;
+    case Format::Gif: encoded = encode_gif(image); break;
+    case Format::Bmp: encoded = encode_bmp(image); break;
+    case Format::Tga: encoded = encode_tga(image); break;
+    case Format::Ico: encoded = encode_ico(image); break;
+    default: break;
+  }
+  if (!encoded) return std::unexpected(encoded.error());
+  // Lossless: the output must decode to exactly the pixels encoded. JPEG never
+  // does; GIF only with up to 256 colours; ICO only up to 256 pixels across.
+  if (settings.lossless &&
+      !is_faithful(Reference{image, image.has_alpha(), image.is_gray()}, *encoded, target, 0.0)) {
+    std::string name(format_name(target));
+    std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return char(std::toupper(c)); });
+    return fail(name + " can't hold this image losslessly; turn off Lossless or choose PNG, WebP or TIFF");
+  }
+  return Output{std::move(*encoded), target, true};
+}
+
+/// More than one frame, page or icon entry: one image at a new size couldn't hold them.
+bool several_images(ByteView input, Format format) {
+  switch (format) {
+    case Format::Png: return png_is_animated(input);
+    case Format::Gif: return gif_is_animated(input);
+    case Format::WebP: return webp_is_animated(input);
+    case Format::Tiff: return tiff_is_multi_page(input);
+    case Format::Ico: return true;
+    default: return false;
+  }
+}
+
 Result<Output> optimize_image(ByteView input, Format format, const Options& options) {
-  // SVG is optimized by SVGO in the web layer.
-  if (format == Format::Svg) return unchanged(format);
+  // SVG is optimized by SVGO in the web layer; HEIC and AVIF have no encoder here.
+  if (format == Format::Svg || format == Format::Heic || format == Format::Avif) return unchanged(format);
 
   auto image = decode_rgba(input, format);
   if (!image) {
     if (format == Format::Tiff && tiff_passes_through(input)) return unchanged(format);
     return std::unexpected(image.error());
   }
+  ColourInfo colour = read_colour_info(input, format);
+
+  // Larger than asked for: scaled down and encoded again in its own format, as a
+  // conversion would (upright, the profile kept), so it is changed whatever its size.
+  if (options.max_size > 0 && std::max(image->width, image->height) > options.max_size &&
+      !several_images(input, format)) {
+    const Format target = format == Format::Bmp || format == Format::Tga ? bmp_tga_target(*image, options) : format;
+    apply_orientation(*image, colour.orientation);
+    return encode_converted(*image, std::move(colour.icc), target, options);
+  }
+
   const Reference reference{*image, image->has_alpha(), image->is_gray()};
-  const ColourInfo colour = read_colour_info(input, format);
 
   const double budget = allowed_error(options);
   auto candidates = image_candidates(input, format, *image, options);
@@ -122,12 +204,12 @@ bool same_geometry(const Mesh& a, const Mesh& b) {
   return triangles(a) == triangles(b);
 }
 
-Result<Output> optimize_mesh_file(ByteView input, Format format, const Options& options) {
+Result<Output> optimize_mesh_file(ByteView input, Format format, const Options& options,
+                                  std::span<const Resource> resources) {
   if (format == Format::Gltf || format == Format::Glb) {
-    auto packed = optimize_gltf(input, format, options);
+    auto packed = optimize_gltf(input, format, options, resources);
     if (!packed) return std::unexpected(packed.error());
-    // gltfpack restructures the file, so it is accepted on size; it keeps every primitive.
-    if (!*packed || (*packed)->size() >= input.size()) return unchanged(format);
+    if (!*packed) return unchanged(format);
     return Output{std::move(**packed), Format::Glb, true};
   }
 
@@ -156,24 +238,21 @@ Result<Output> optimize_mesh_file(ByteView input, Format format, const Options& 
 
 }  // namespace
 
-Result<Output> optimize(ByteView input, const Options& options) {
+Result<Output> optimize(ByteView input, const Options& options) { return optimize(input, options, {}); }
+
+Result<Output> optimize(ByteView input, const Options& options, std::span<const Resource> resources) {
   const Options settings = normalized(options);
   const Format format = detect(input);
   switch (kind_of(format)) {
     case Kind::Image: return optimize_image(input, format, settings);
-    case Kind::Mesh: return optimize_mesh_file(input, format, settings);
+    case Kind::Mesh: return optimize_mesh_file(input, format, settings, resources);
     case Kind::Unknown: break;
   }
   return fail("Unknown file format");
 }
 
 Result<Output> convert(ByteView input, Format target, const Options& options) {
-  const Options settings = normalized(options);
-  switch (target) {
-    case Format::Png: case Format::Jpeg: case Format::WebP: case Format::Gif:
-    case Format::Bmp: case Format::Tga: case Format::Ico: case Format::Tiff: break;
-    default: return fail("Unsupported conversion target");
-  }
+  if (!is_conversion_target(target)) return fail("Unsupported conversion target");
   const Format source = detect(input);
   if (kind_of(source) != Kind::Image || source == Format::Svg) return fail("Only raster images can be converted");
 
@@ -181,55 +260,34 @@ Result<Output> convert(ByteView input, Format target, const Options& options) {
   if (!image) return std::unexpected(image.error());
   ColourInfo colour = read_colour_info(input, source);
   apply_orientation(*image, colour.orientation);
-  // Only an RGB profile describes the decoded RGB pixels, and only PNG, JPEG,
-  // WebP and TIFF can carry it. Otherwise the profile is applied to the pixels
-  // (RGB and grey profiles); a CMYK profile no longer fits pixels already
-  // turned into RGB, so it is dropped with them left as decoded.
-  const bool embeds_icc = icc_colour_space(colour.icc) == "RGB " &&
-                          (target == Format::Png || target == Format::Jpeg || target == Format::WebP ||
-                           target == Format::Tiff);
-  if (!embeds_icc && !colour.icc.empty()) {
-    convert_to_srgb(*image, colour.icc);
-    colour.icc.clear();
-  }
+  return encode_converted(*image, std::move(colour.icc), target, normalized(options));
+}
 
-  Result<Bytes> encoded = fail("Unsupported conversion target");
-  switch (target) {
-    case Format::Png: encoded = encode_png(*image, colour.icc); break;
-    case Format::Jpeg: encoded = encode_jpeg(*image, settings.quality, colour.icc); break;
-    case Format::WebP:
-      encoded = encode_webp(*image, settings.quality, settings.lossless || settings.quality == 100, colour.icc);
-      break;
-    case Format::Tiff: encoded = encode_tiff(*image, colour.icc); break;
-    case Format::Gif: encoded = encode_gif(*image); break;
-    case Format::Bmp: encoded = encode_bmp(*image); break;
-    case Format::Tga: encoded = encode_tga(*image); break;
-    case Format::Ico: encoded = encode_ico(*image); break;
-    default: break;
-  }
-  if (!encoded) return std::unexpected(encoded.error());
-  // Lossless: the output must decode to exactly the pixels encoded. JPEG never
-  // does; GIF only with up to 256 colours; ICO only up to 256 pixels across.
-  if (settings.lossless &&
-      !is_faithful(Reference{*image, image->has_alpha(), image->is_gray()}, *encoded, target, 0.0)) {
-    std::string name(format_name(target));
-    std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return char(std::toupper(c)); });
-    return fail(name + " can't hold this image losslessly; turn off Lossless or choose PNG, WebP or TIFF");
-  }
-  return Output{std::move(*encoded), target, true};
+Result<Output> convert_pixels(Pixels pixels, ByteView icc, Format target, const Options& options) {
+  if (!is_conversion_target(target)) return fail("Unsupported conversion target");
+  if (!valid_pixels(pixels)) return fail("Pixel data doesn't match the dimensions, or they're out of range");
+  Image image{pixels.width, pixels.height, std::move(pixels.rgba)};
+  return encode_converted(image, Bytes(icc.begin(), icc.end()), target, normalized(options));
+}
+
+Pixels to_srgb(Pixels pixels, ByteView icc) {
+  if (!valid_pixels(pixels)) return pixels;
+  Image image{pixels.width, pixels.height, std::move(pixels.rgba)};
+  convert_to_srgb(image, icc);
+  return Pixels{image.width, image.height, std::move(image.rgba)};
 }
 
 Result<Geometry> decode_mesh(ByteView input) {
   auto read = read_mesh(input, detect(input), MeshUse::Display);
   if (!read) return std::unexpected(read.error());
   Mesh& mesh = read->mesh;
-  if (mesh.indices.empty()) return fail("The mesh has no triangles");
+  if (mesh.positions.empty()) return fail("The mesh has no geometry");
   if (!all_finite(mesh.positions)) return fail("The mesh has non-finite coordinates");
   // Broken normals or colours are left out; positions alone still display.
   if (!all_finite(mesh.normals)) mesh.normals.clear();
   if (!all_finite(mesh.colors)) mesh.colors.clear();
   return Geometry{std::move(mesh.positions), std::move(mesh.normals), std::move(mesh.colors),
-                  std::move(mesh.indices)};
+                  std::move(mesh.indices), std::move(mesh.lines)};
 }
 
 Result<Pixels> decode(ByteView input) {

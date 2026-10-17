@@ -1,7 +1,9 @@
 // TIFF through libtiff, read and written from memory. Optimization re-encodes
 // single-page 8-bit greyscale/RGB(A) images with Deflate or LZW plus the
-// horizontal predictor (lossless), keeping the ICC profile, orientation and
-// resolution.
+// horizontal predictor (lossless), or in the file's own compression when that
+// is Zstandard, LZMA, WebP or JPEG (the lossy two at the chosen quality), keeping
+// the ICC profile, orientation and resolution. Other compressions are not
+// written: readers support them less widely.
 // Multi-page, 16-bit, float, CMYK and other layouts pass through unchanged,
 // since an 8-bit RGBA round trip could not reproduce them.
 
@@ -78,8 +80,10 @@ TIFF* open(MemoryFile& file, const char* mode) {
 struct Layout {
   std::uint32_t width = 0, height = 0;
   std::uint16_t bits = 0, samples = 0, photometric = 0, planar = 0, sample_format = SAMPLEFORMAT_UINT;
+  std::uint16_t compression = COMPRESSION_NONE;
   std::uint16_t extra_type = EXTRASAMPLE_UNASSALPHA;
   bool multi_page = false;
+  bool tiled = false;
 };
 
 Layout read_layout(TIFF* tif) {
@@ -91,6 +95,12 @@ Layout read_layout(TIFF* tif) {
   TIFFGetFieldDefaulted(tif, TIFFTAG_PLANARCONFIG, &l.planar);
   TIFFGetFieldDefaulted(tif, TIFFTAG_SAMPLEFORMAT, &l.sample_format);
   TIFFGetField(tif, TIFFTAG_PHOTOMETRIC, &l.photometric);
+  TIFFGetFieldDefaulted(tif, TIFFTAG_COMPRESSION, &l.compression);
+  // JPEG-compressed YCbCr is read as RGB: libjpeg converts it, as it would any JPEG.
+  if (l.compression == COMPRESSION_JPEG && l.photometric == PHOTOMETRIC_YCBCR && l.samples == 3 &&
+      TIFFSetField(tif, TIFFTAG_JPEGCOLORMODE, JPEGCOLORMODE_RGB)) {
+    l.photometric = PHOTOMETRIC_RGB;
+  }
   std::uint16_t extra_count = 0;
   std::uint16_t* extra = nullptr;
   if (TIFFGetField(tif, TIFFTAG_EXTRASAMPLES, &extra_count, &extra) && extra_count > 0) {
@@ -99,27 +109,16 @@ Layout read_layout(TIFF* tif) {
     l.extra_type = EXTRASAMPLE_ASSOCALPHA;  // what libtiff assumes for a fourth sample without the tag
   }
   l.multi_page = TIFFNumberOfDirectories(tif) > 1;
+  l.tiled = TIFFIsTiled(tif) != 0;
   return l;
 }
 
-/// Straight colour from colour premultiplied by alpha.
-void unpremultiply(Image& image) {
-  for (std::size_t i = 0; i < image.rgba.size(); i += 4) {
-    const unsigned a = image.rgba[i + 3];
-    if (a != 0 && a != 255) {
-      for (int c = 0; c < 3; ++c) {
-        image.rgba[i + c] = std::uint8_t(std::min(255u, (image.rgba[i + c] * 255u + a / 2) / a));
-      }
-    }
-  }
-}
-
-/// Layouts an 8-bit RGBA round trip reproduces exactly.
+/// Layouts an 8-bit RGBA round trip reproduces exactly (read by scanline, so in strips).
 bool reproducible(const Layout& l) {
   const bool gray = l.photometric == PHOTOMETRIC_MINISBLACK && (l.samples == 1 || l.samples == 2);
   const bool rgb = l.photometric == PHOTOMETRIC_RGB && (l.samples == 3 || l.samples == 4);
-  return !l.multi_page && l.bits == 8 && l.sample_format == SAMPLEFORMAT_UINT &&
-         l.planar == PLANARCONFIG_CONTIG && (gray || rgb) && std::uint64_t(l.width) * l.height <= kMaxPixels;
+  return !l.multi_page && !l.tiled && l.bits == 8 && l.sample_format == SAMPLEFORMAT_UINT &&
+         l.planar == PLANARCONFIG_CONTIG && (gray || rgb) && pixels_in_range(l.width, l.height);
 }
 
 /// Exact samples of a reproducible layout, widened to RGBA.
@@ -173,8 +172,14 @@ Carried read_carried(TIFF* tif) {
   return c;
 }
 
+/// How a candidate is compressed: `quality` for JPEG and lossy WebP, 0 for lossless WebP.
+struct Codec {
+  std::uint16_t compression;
+  int quality = 0;
+};
+
 /// Writes `image` with `samples` channels (1 grey, 2 grey+alpha, 3 RGB, 4 RGBA).
-std::optional<Bytes> write_tiff(const Image& image, int samples, std::uint16_t extra_type, std::uint16_t compression,
+std::optional<Bytes> write_tiff(const Image& image, int samples, std::uint16_t extra_type, Codec codec,
                                 const Carried& carried) {
   Bytes out;
   MemoryFile file{{}, &out};
@@ -186,12 +191,35 @@ std::optional<Bytes> write_tiff(const Image& image, int samples, std::uint16_t e
   TIFFSetField(tif, TIFFTAG_IMAGELENGTH, image.height);
   TIFFSetField(tif, TIFFTAG_BITSPERSAMPLE, 8);
   TIFFSetField(tif, TIFFTAG_SAMPLESPERPIXEL, samples);
-  TIFFSetField(tif, TIFFTAG_PHOTOMETRIC, gray ? PHOTOMETRIC_MINISBLACK : PHOTOMETRIC_RGB);
+  // JPEG stores colour as YCbCr with half-resolution chroma, from RGB the library converts.
+  const bool ycbcr = codec.compression == COMPRESSION_JPEG && !gray;
+  TIFFSetField(tif, TIFFTAG_PHOTOMETRIC, gray ? PHOTOMETRIC_MINISBLACK : ycbcr ? PHOTOMETRIC_YCBCR : PHOTOMETRIC_RGB);
   TIFFSetField(tif, TIFFTAG_PLANARCONFIG, PLANARCONFIG_CONTIG);
   TIFFSetField(tif, TIFFTAG_ORIENTATION, carried.orientation);
-  TIFFSetField(tif, TIFFTAG_COMPRESSION, compression);
-  TIFFSetField(tif, TIFFTAG_PREDICTOR, PREDICTOR_HORIZONTAL);
-  if (compression == COMPRESSION_ADOBE_DEFLATE) TIFFSetField(tif, TIFFTAG_ZIPQUALITY, 9);
+  TIFFSetField(tif, TIFFTAG_COMPRESSION, codec.compression);
+  switch (codec.compression) {
+    case COMPRESSION_ADOBE_DEFLATE: TIFFSetField(tif, TIFFTAG_ZIPQUALITY, 9); break;
+    case COMPRESSION_ZSTD: TIFFSetField(tif, TIFFTAG_ZSTD_LEVEL, 19); break;
+    case COMPRESSION_WEBP:
+      TIFFSetField(tif, TIFFTAG_WEBP_LOSSLESS, codec.quality == 0 ? 1 : 0);
+      if (codec.quality > 0) TIFFSetField(tif, TIFFTAG_WEBP_LEVEL, codec.quality);
+      break;
+    case COMPRESSION_JPEG:
+      TIFFSetField(tif, TIFFTAG_JPEGQUALITY, codec.quality);
+      // Huffman tables in each strip, optimized for it. Shared ones (libtiff's
+      // default) come out wrong from mozjpeg: every decoder reads such strips stretched.
+      TIFFSetField(tif, TIFFTAG_JPEGTABLESMODE, JPEGTABLESMODE_QUANT);
+      if (ycbcr) {
+        TIFFSetField(tif, TIFFTAG_YCBCRSUBSAMPLING, 2, 2);
+        TIFFSetField(tif, TIFFTAG_JPEGCOLORMODE, JPEGCOLORMODE_RGB);
+      }
+      break;
+    default: break;
+  }
+  // The predictor helps the lossless general-purpose compressors only.
+  if (codec.compression != COMPRESSION_JPEG && codec.compression != COMPRESSION_WEBP) {
+    TIFFSetField(tif, TIFFTAG_PREDICTOR, PREDICTOR_HORIZONTAL);
+  }
   if (alpha) {
     const std::uint16_t extra[] = {extra_type};
     TIFFSetField(tif, TIFFTAG_EXTRASAMPLES, 1, extra);
@@ -204,9 +232,13 @@ std::optional<Bytes> write_tiff(const Image& image, int samples, std::uint16_t e
     TIFFSetField(tif, TIFFTAG_YRESOLUTION, carried.y_resolution);
     TIFFSetField(tif, TIFFTAG_RESOLUTIONUNIT, carried.resolution_unit);
   }
-  // Strips of about 1 MiB: each strip restarts the compressor's dictionary.
+  // Strips of about 1 MiB: each strip restarts the compressor's dictionary. JPEG
+  // strips hold whole rows of 16-pixel blocks.
   const std::size_t row_bytes = std::size_t(image.width) * std::size_t(samples);
-  const auto rows_per_strip = std::uint32_t(std::clamp<std::size_t>((1u << 20) / row_bytes, 1, image.height));
+  auto rows_per_strip = std::uint32_t(std::clamp<std::size_t>((1u << 20) / row_bytes, 1, image.height));
+  if (codec.compression == COMPRESSION_JPEG && rows_per_strip < image.height) {
+    rows_per_strip = std::max<std::uint32_t>(16, rows_per_strip / 16 * 16);
+  }
   TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP, rows_per_strip);
 
   Bytes row(row_bytes);
@@ -224,6 +256,8 @@ std::optional<Bytes> write_tiff(const Image& image, int samples, std::uint16_t e
     }
     ok = TIFFWriteScanline(tif, row.data(), y, 0) == 1;
   }
+  // The last strip and the directory are written here; TIFFClose reports nothing.
+  ok = ok && TIFFFlush(tif) == 1;
   TIFFClose(tif);
   if (!ok) return std::nullopt;
   return out;
@@ -247,7 +281,7 @@ Result<Image> decode_tiff(ByteView data) {
   const Layout layout = read_layout(tif);
   std::uint16_t orientation = ORIENTATION_TOPLEFT;
   TIFFGetFieldDefaulted(tif, TIFFTAG_ORIENTATION, &orientation);
-  if (layout.width == 0 || layout.height == 0 || std::uint64_t(layout.width) * layout.height > kMaxPixels) {
+  if (!pixels_in_range(layout.width, layout.height)) {
     TIFFClose(tif);
     return fail("TIFF dimensions too large");
   }
@@ -256,7 +290,7 @@ Result<Image> decode_tiff(ByteView data) {
   if (reproducible(layout)) {
     if (auto image = read_samples(tif, layout)) {
       TIFFClose(tif);
-      if (layout.extra_type == EXTRASAMPLE_ASSOCALPHA) unpremultiply(*image);
+      if (layout.extra_type == EXTRASAMPLE_ASSOCALPHA) unpremultiply(image->rgba);
       return std::move(*image);
     }
   }
@@ -275,7 +309,7 @@ Result<Image> decode_tiff(ByteView data) {
   if (!ok) return fail("TIFF decode failed");
   // libtiff premultiplies colour (greyscale it returns straight); convert back to straight alpha.
   const bool grey = layout.photometric == PHOTOMETRIC_MINISBLACK || layout.photometric == PHOTOMETRIC_MINISWHITE;
-  if (!grey) unpremultiply(image);
+  if (!grey) unpremultiply(image.rgba);
   return image;
 }
 
@@ -292,7 +326,7 @@ bool tiff_passes_through(ByteView data) {
   return undecodable;
 }
 
-std::vector<Bytes> tiff_candidates(ByteView input, const Options& options) {
+std::vector<Bytes> tiff_candidates(ByteView input, const Image& decoded, const Options& options) {
   std::vector<Bytes> candidates;
   // Copying every private tag and sub-IFD faithfully is out of scope; with
   // metadata preservation on, TIFFs pass through.
@@ -303,13 +337,33 @@ std::vector<Bytes> tiff_candidates(ByteView input, const Options& options) {
   if (!tif) return candidates;
   const Layout layout = read_layout(tif);
   const Carried carried = read_carried(tif);
-  std::optional<Image> image;
-  if (reproducible(layout)) image = read_samples(tif, layout);
+  // decode_tiff read a reproducible layout sample for sample: the decoded image is
+  // the samples, except premultiplied colour, which is written back as stored.
+  std::optional<Image> premultiplied;
+  if (reproducible(layout) && layout.extra_type == EXTRASAMPLE_ASSOCALPHA) premultiplied = read_samples(tif, layout);
   TIFFClose(tif);
-  if (!image) return candidates;
+  if (!reproducible(layout) || (layout.extra_type == EXTRASAMPLE_ASSOCALPHA && !premultiplied)) return candidates;
+  const Image& image = premultiplied ? *premultiplied : decoded;
 
-  for (std::uint16_t compression : {std::uint16_t(COMPRESSION_ADOBE_DEFLATE), std::uint16_t(COMPRESSION_LZW)}) {
-    if (auto out = write_tiff(*image, layout.samples, layout.extra_type, compression, carried)) {
+  std::vector<Codec> codecs{{COMPRESSION_ADOBE_DEFLATE}, {COMPRESSION_LZW}};
+  const bool alpha = layout.samples == 2 || layout.samples == 4;
+  const bool rgb = layout.samples >= 3;
+  switch (layout.compression) {
+    case COMPRESSION_ZSTD: codecs.push_back({COMPRESSION_ZSTD}); break;
+    case COMPRESSION_LZMA: codecs.push_back({COMPRESSION_LZMA}); break;
+    case COMPRESSION_WEBP:  // libtiff writes WebP for RGB(A) only
+      if (rgb) {
+        codecs.push_back({COMPRESSION_WEBP});
+        if (!options.lossless) codecs.push_back({COMPRESSION_WEBP, options.quality});
+      }
+      break;
+    case COMPRESSION_JPEG:  // no alpha in JPEG
+      if (!alpha && !options.lossless) codecs.push_back({COMPRESSION_JPEG, options.quality});
+      break;
+    default: break;
+  }
+  for (const Codec& codec : codecs) {
+    if (auto out = write_tiff(image, layout.samples, layout.extra_type, codec, carried)) {
       candidates.push_back(std::move(*out));
     }
   }
@@ -320,10 +374,19 @@ Result<Bytes> encode_tiff(const Image& image, ByteView icc) {
   const int samples = image.is_gray() ? (image.has_alpha() ? 2 : 1) : (image.has_alpha() ? 4 : 3);
   Carried carried;
   carried.icc.assign(icc.begin(), icc.end());
-  if (auto out = write_tiff(image, samples, EXTRASAMPLE_UNASSALPHA, COMPRESSION_ADOBE_DEFLATE, carried)) {
+  if (auto out = write_tiff(image, samples, EXTRASAMPLE_UNASSALPHA, {COMPRESSION_ADOBE_DEFLATE}, carried)) {
     return std::move(*out);
   }
   return fail("TIFF encode failed");
+}
+
+bool tiff_is_multi_page(ByteView data) {
+  MemoryFile file{data};
+  TIFF* tif = open(file, "r");
+  if (!tif) return false;
+  const bool several = TIFFNumberOfDirectories(tif) > 1;
+  TIFFClose(tif);
+  return several;
 }
 
 }  // namespace pixie::detail

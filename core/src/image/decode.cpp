@@ -13,21 +13,13 @@
 
 namespace pixie::detail {
 
-namespace {
-
-bool too_large(std::uint64_t width, std::uint64_t height) {
-  return width == 0 || height == 0 || width * height > kMaxPixels;
-}
-
-}  // namespace
-
 Result<Image> decode_png(ByteView data) {
   lodepng::State state;
   unsigned width = 0, height = 0;
   if (lodepng_inspect(&width, &height, &state, data.data(), data.size()) != 0) {
     return fail("Not a valid PNG");
   }
-  if (too_large(width, height)) return fail("PNG dimensions too large");
+  if (!pixels_in_range(width, height)) return fail("PNG dimensions too large");
   if (!png_within_limits(data)) return fail("PNG data inflates beyond its declared size");
   Image image;
   if (const unsigned error = lodepng::decode(image.rgba, width, height, data.data(), data.size(), LCT_RGBA, 8)) {
@@ -42,9 +34,22 @@ namespace {
 
 Result<Image> decode_webp(ByteView data) {
   // The animation decoder allocates its canvas on creation: check the size first.
-  int width = 0, height = 0;
-  if (!WebPGetInfo(data.data(), data.size(), &width, &height)) return fail("Not a valid WebP");
-  if (too_large(std::uint64_t(width), std::uint64_t(height))) return fail("WebP dimensions too large");
+  WebPBitstreamFeatures features;
+  if (WebPGetFeatures(data.data(), data.size(), &features) != VP8_STATUS_OK) return fail("Not a valid WebP");
+  if (!pixels_in_range(std::uint64_t(features.width), std::uint64_t(features.height))) {
+    return fail("WebP dimensions too large");
+  }
+  if (!features.has_animation) {
+    // A still image decodes straight into the result, without the animation decoder's canvases.
+    Image image;
+    image.width = std::uint32_t(features.width);
+    image.height = std::uint32_t(features.height);
+    image.rgba.resize(image.pixel_count() * 4);
+    if (!WebPDecodeRGBAInto(data.data(), data.size(), image.rgba.data(), image.rgba.size(), int(image.width) * 4)) {
+      return fail("WebP decode failed");
+    }
+    return image;
+  }
   WebPAnimDecoderOptions options;
   WebPAnimDecoderOptionsInit(&options);
   options.color_mode = MODE_RGBA;
@@ -56,7 +61,7 @@ Result<Image> decode_webp(ByteView data) {
   std::uint8_t* frame = nullptr;
   int timestamp = 0;
   Result<Image> result = fail("WebP decode failed");
-  if (WebPAnimDecoderGetInfo(decoder, &info) && !too_large(info.canvas_width, info.canvas_height) &&
+  if (WebPAnimDecoderGetInfo(decoder, &info) && pixels_in_range(info.canvas_width, info.canvas_height) &&
       WebPAnimDecoderGetNext(decoder, &frame, &timestamp)) {
     Image image;
     image.width = info.canvas_width;
@@ -74,8 +79,14 @@ Result<Image> decode_stb(ByteView data, const char* what) {
   if (!stbi_info_from_memory(data.data(), size, &width, &height, &channels)) {
     return fail(std::string("Not a valid ") + what);
   }
-  if (too_large(std::uint64_t(width), std::uint64_t(height))) {
+  if (!pixels_in_range(std::uint64_t(width), std::uint64_t(height))) {
     return fail(std::string(what) + " dimensions too large");
+  }
+  // stb_image fills whatever the data doesn't cover, so a header alone could make it
+  // allocate and fill 64 megapixels. Pixels stb reads take data: at least a bit
+  // each in BMP, a 2-byte packet per 128 in run-length TGA.
+  if (std::uint64_t(width) * std::uint64_t(height) > std::uint64_t(data.size()) * 128) {
+    return fail(std::string(what) + " data too short for its dimensions");
   }
   stbi_uc* pixels = stbi_load_from_memory(data.data(), size, &width, &height, &channels, 4);
   if (!pixels) return fail(std::string(what) + " decode failed: " + stbi_failure_reason());
@@ -99,6 +110,8 @@ Result<Image> decode_rgba(ByteView data, Format format) {
     case Format::Tga: return decode_stb(data, "TGA");
     case Format::Ico: return decode_ico(data);
     case Format::Tiff: return decode_tiff(data);
+    case Format::Heic: return fail("HEIC is decoded by pixie::heif::decode; convert its pixels with convert_pixels");
+    case Format::Avif: return fail("AVIF is not decoded here; convert pixels decoded elsewhere with convert_pixels");
     default: return fail(std::string("Cannot decode ") + std::string(format_name(format)));
   }
 }

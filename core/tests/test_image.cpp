@@ -1,14 +1,19 @@
-#include "fixtures.hpp"
+#include "results.hpp"
 
 #include <doctest/doctest.h>
 #include <gif_lib.h>
 #include <lodepng.h>
 #include <tiffio.h>
 
+#include <algorithm>
+#include <cstring>
+#include <initializer_list>
+
 using namespace pixie;
 using detail::decode_rgba;
 using detail::Image;
 using detail::mean_error;
+using fixtures::optimized;
 
 namespace {
 
@@ -16,17 +21,6 @@ Image decoded(const Bytes& data) {
   auto image = decode_rgba(data, detect(data));
   REQUIRE(image.has_value());
   return *image;
-}
-
-/// The result file: the new data, or the input itself when nothing changed.
-Output optimized(const Bytes& input, Options options = {}) {
-  auto result = optimize(input, options);
-  REQUIRE(result.has_value());
-  if (!result->changed) {
-    CHECK(result->data.empty());
-    result->data = input;
-  }
-  return *result;
 }
 
 Bytes uncompressed_png(const Image& image) {
@@ -116,17 +110,30 @@ int gif_frames(const Bytes& data, int* delay) {
   return frames;
 }
 
-Bytes uncompressed_tiff(const Image& image) {
+/// An RGB TIFF in `compression`, one strip; JPEG at quality 100 as YCbCr, as cameras and scanners write it
+/// (Huffman tables in each strip: see write_tiff in tiff.cpp).
+Bytes compressed_tiff(const Image& image, std::uint16_t compression) {
   detail::TempFile file(".tif");
   TIFF* tif = TIFFOpen(file.path().c_str(), "w");
   REQUIRE(tif);
+  const bool jpeg = compression == COMPRESSION_JPEG;
   TIFFSetField(tif, TIFFTAG_IMAGEWIDTH, image.width);
   TIFFSetField(tif, TIFFTAG_IMAGELENGTH, image.height);
   TIFFSetField(tif, TIFFTAG_BITSPERSAMPLE, 8);
   TIFFSetField(tif, TIFFTAG_SAMPLESPERPIXEL, 3);
-  TIFFSetField(tif, TIFFTAG_PHOTOMETRIC, PHOTOMETRIC_RGB);
+  TIFFSetField(tif, TIFFTAG_PHOTOMETRIC, jpeg ? PHOTOMETRIC_YCBCR : PHOTOMETRIC_RGB);
   TIFFSetField(tif, TIFFTAG_PLANARCONFIG, PLANARCONFIG_CONTIG);
-  TIFFSetField(tif, TIFFTAG_COMPRESSION, COMPRESSION_NONE);
+  REQUIRE(TIFFSetField(tif, TIFFTAG_COMPRESSION, compression) == 1);
+  if (jpeg) {
+    TIFFSetField(tif, TIFFTAG_JPEGQUALITY, 100);
+    TIFFSetField(tif, TIFFTAG_YCBCRSUBSAMPLING, 2, 2);
+    TIFFSetField(tif, TIFFTAG_JPEGTABLESMODE, JPEGTABLESMODE_QUANT);
+    TIFFSetField(tif, TIFFTAG_JPEGCOLORMODE, JPEGCOLORMODE_RGB);
+  }
+  TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP, image.height);
+  if (compression == COMPRESSION_ZSTD) TIFFSetField(tif, TIFFTAG_ZSTD_LEVEL, 1);
+  if (compression == COMPRESSION_LZMA) TIFFSetField(tif, TIFFTAG_LZMAPRESET, 0);
+  if (compression == COMPRESSION_WEBP) TIFFSetField(tif, TIFFTAG_WEBP_LOSSLESS, 1);
   Bytes row(image.width * 3);
   for (std::uint32_t y = 0; y < image.height; ++y) {
     for (std::uint32_t x = 0; x < image.width; ++x) {
@@ -138,6 +145,22 @@ Bytes uncompressed_tiff(const Image& image) {
   auto bytes = file.read();
   REQUIRE(bytes.has_value());
   return *bytes;
+}
+
+/// The compression tag of a TIFF.
+std::uint16_t tiff_compression(const Bytes& data) {
+  detail::TempFile file(".tif");
+  REQUIRE(file.write(data));
+  TIFF* tif = TIFFOpen(file.path().c_str(), "r");
+  REQUIRE(tif);
+  std::uint16_t compression = 0;
+  TIFFGetFieldDefaulted(tif, TIFFTAG_COMPRESSION, &compression);
+  TIFFClose(tif);
+  return compression;
+}
+
+bool contains(const Bytes& data, std::initializer_list<std::uint8_t> bytes) {
+  return std::search(data.begin(), data.end(), bytes.begin(), bytes.end()) != data.end();
 }
 
 /// A 16x16 icon whose single entry is a 32-bit DIB (BITMAPINFOHEADER + BGRA + AND mask).
@@ -280,12 +303,56 @@ TEST_CASE("BMP and TGA become lossless PNG") {
 
 TEST_CASE("TIFF: lossless recompression stays TIFF") {
   const auto image = fixtures::make_image(96, 64, 6);
-  const auto input = uncompressed_tiff(image);
+  const auto input = compressed_tiff(image, COMPRESSION_NONE);
   const auto out = optimized(input);
   CHECK(out.changed);
   CHECK(out.format == Format::Tiff);
   CHECK(out.data.size() < input.size());
   CHECK(decoded(out.data).rgba == image.rgba);
+}
+
+TEST_CASE("TIFF: Zstandard, LZMA and WebP files are decoded and recompressed without loss") {
+  const auto image = fixtures::make_image(96, 64, 6);
+  for (const std::uint16_t compression :
+       {std::uint16_t(COMPRESSION_ZSTD), std::uint16_t(COMPRESSION_LZMA), std::uint16_t(COMPRESSION_WEBP)}) {
+    CAPTURE(compression);
+    const auto input = compressed_tiff(image, compression);
+    CHECK(decoded(input).rgba == image.rgba);
+    const auto out = optimized(input, {.lossless = true});
+    CHECK(out.format == Format::Tiff);
+    CHECK(decoded(out.data).rgba == image.rgba);
+    // In the file's own codec or one that every reader has.
+    const auto written = tiff_compression(out.data);
+    CHECK((written == compression || written == COMPRESSION_ADOBE_DEFLATE || written == COMPRESSION_LZW));
+  }
+  // Zstandard at its fastest and LZMA at its lightest preset, without a predictor, leave room.
+  CHECK(optimized(compressed_tiff(image, COMPRESSION_ZSTD)).changed);
+  CHECK(optimized(compressed_tiff(image, COMPRESSION_LZMA)).changed);
+}
+
+TEST_CASE("TIFF: JPEG files are re-encoded at the chosen quality as baseline JPEG, never in lossless mode") {
+  const auto image = fixtures::make_image(96, 64, 6);
+  const auto input = compressed_tiff(image, COMPRESSION_JPEG);
+  const auto pixels = decoded(input);
+  CHECK(mean_error(pixels, image) < 3.0);
+
+  const auto out = optimized(input, {.quality = 75});
+  REQUIRE(out.changed);
+  CHECK(out.data.size() < input.size());
+  CHECK(tiff_compression(out.data) == COMPRESSION_JPEG);
+  CHECK(mean_error(decoded(out.data), pixels) < 10.0);
+  // Baseline (SOF0), not the progressive scans mozjpeg makes by default (SOF2):
+  // TIFF readers expect baseline. Entropy-coded data never holds these marker bytes.
+  CHECK(contains(out.data, {0xFF, 0xC0}));
+  CHECK_FALSE(contains(out.data, {0xFF, 0xC2}));
+
+  const auto lossless = optimized(input, {.lossless = true});
+  if (lossless.changed) CHECK(decoded(lossless.data).rgba == pixels.rgba);
+  CHECK((!lossless.changed || tiff_compression(lossless.data) != COMPRESSION_JPEG));
+
+  const auto png = convert(input, Format::Png, {});
+  REQUIRE(png.has_value());
+  CHECK(decoded(png->data).rgba == pixels.rgba);
 }
 
 TEST_CASE("ICO: bitmap entries become PNG entries, pixels unchanged") {
@@ -299,7 +366,7 @@ TEST_CASE("ICO: bitmap entries become PNG entries, pixels unchanged") {
 }
 
 TEST_CASE("conversions produce decodable files of the target format") {
-  const auto source = *detail::encode_png(fixtures::make_image(300, 200, 6, true));
+  const auto source = uncompressed_png(fixtures::make_image(300, 60, 6, true));  // wider than an icon
   for (auto target : {Format::Png, Format::Jpeg, Format::WebP, Format::Gif, Format::Bmp, Format::Tga, Format::Ico,
                       Format::Tiff}) {
     CAPTURE(format_name(target));
@@ -319,4 +386,41 @@ TEST_CASE("conversions produce decodable files of the target format") {
 TEST_CASE("undecodable images are errors, not silent passes") {
   Bytes broken = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n', 0, 0, 0, 13, 'I', 'H', 'D', 'R'};
   CHECK_FALSE(optimize(broken, {}).has_value());
+}
+
+TEST_CASE("Resize: images larger than max_size are scaled down, in their own format") {
+  const auto image = fixtures::make_image(200, 100, 6, true);
+  const auto png = uncompressed_png(image);
+
+  const auto smaller = optimized(png, {.max_size = 50});
+  CHECK(smaller.changed);
+  CHECK(smaller.format == Format::Png);
+  const auto scaled = decoded(smaller.data);
+  CHECK(scaled.width == 50);
+  CHECK(scaled.height == 25);
+  CHECK(scaled.has_alpha());
+
+  // Within the size: optimized as usual, same dimensions.
+  CHECK(decoded(optimized(png, {.max_size = 400}).data).width == 200);
+
+  // JPEG stays JPEG; BMP becomes PNG or JPEG as it would when optimized.
+  const auto opaque = fixtures::make_image(200, 100, 6);
+  const auto jpeg = optimized(*detail::encode_jpeg(opaque, 90), {.max_size = 64});
+  CHECK(jpeg.format == Format::Jpeg);
+  CHECK(decoded(jpeg.data).width == 64);
+  CHECK(optimized(*detail::encode_bmp(opaque), {.quality = 90, .max_size = 64}).format == Format::Png);
+
+  // Conversions scale too; Lossless keeps the pixels the scaling made, which JPEG can't.
+  const auto converted = convert(png, Format::WebP, {.max_size = 40});
+  REQUIRE(converted.has_value());
+  CHECK(decoded(converted->data).width == 40);
+  CHECK(convert(png, Format::Png, {.lossless = true, .max_size = 40}).has_value());
+  CHECK_FALSE(optimize(*detail::encode_jpeg(opaque, 90), {.lossless = true, .max_size = 64}).has_value());
+
+  // An animation keeps every frame, at its size.
+  const auto gif = animated_gif();
+  const auto kept = optimized(gif, {.max_size = 4});
+  int delay = 0;
+  CHECK(gif_frames(kept.data, &delay) > 1);
+  CHECK(decoded(kept.data).width == decoded(gif).width);
 }

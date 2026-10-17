@@ -151,9 +151,10 @@ TEST_CASE("C3: a greyscale PNG optimized from RGB gets a matching grey profile")
   const auto out = optimize(input, {});
   REQUIRE(out.has_value());
   REQUIRE(out->changed);
-  const bool grey = out->data[25] == 0 || out->data[25] == 4;
+  // Greyscale chosen (colour type 0 or 4): the profile must have become a grey one.
+  REQUIRE((out->data[25] == 0 || out->data[25] == 4));
   const auto icc = detail::read_colour_info(out->data, Format::Png).icc;
-  CHECK(detail::icc_colour_space(icc) == (grey ? "GRAY" : "RGB "));
+  CHECK(detail::icc_colour_space(icc) == "GRAY");
 }
 
 TEST_CASE("C4: converting an image with a grey profile works and drops the profile") {

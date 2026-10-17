@@ -320,6 +320,8 @@ a {
   .workspace {
     grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
     grid-template-areas: 'files preview' 'panel preview';
+    /* The preview spans both rows: its extra height goes below the panel, not between the cards. */
+    grid-template-rows: auto 1fr;
     align-items: start;
   }
 }
@@ -712,6 +714,12 @@ a {
   color: var(--faint);
   font-size: 11.5px;
   pointer-events: none;
+}
+
+/* The hint lets drags through to the model; its button takes clicks. */
+.mesh-hint .text-button {
+  margin-right: 10px;
+  pointer-events: auto;
 }
 
 .spinner {

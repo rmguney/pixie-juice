@@ -6,7 +6,7 @@
 // made WebKit evaluate a second copy of three.js, whose objects then failed
 // instanceof checks. The worker itself only starts when a model needs it.
 
-import { ImageBitmapLoader, Texture, TextureLoader } from 'three';
+import { type AnimationClip, ImageBitmapLoader, type Object3D, Texture, TextureLoader } from 'three';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import { parseGltf } from './gltf';
 import { serializeScene } from './sceneTransfer';
@@ -43,15 +43,16 @@ function readImage(url: string, onLoad: (image: Blob) => void, onError?: (error:
 
 // GLTFLoader reads images with ImageBitmapLoader (with TextureLoader where it
 // distrusts ImageBitmap), FBXLoader with TextureLoader. Both need decoding the
-// worker leaves to the page, so either gets the encoded image instead.
+// worker leaves to the page, so either gets the encoded image instead. The
+// loader's manager maps a .gltf's file references to the files given with it.
 ImageBitmapLoader.prototype.load = function (url, onLoad, _onProgress, onError) {
-  readImage(url, (image) => onLoad?.(image as unknown as ImageBitmap), onError);
+  readImage(this.manager.resolveURL(url), (image) => onLoad?.(image as unknown as ImageBitmap), onError);
 };
 
 TextureLoader.prototype.load = function (url, onLoad, _onProgress, onError) {
   const texture = new Texture();
   readImage(
-    url,
+    this.manager.resolveURL(url),
     (image) => {
       texture.image = image;
       onLoad?.(texture);
@@ -61,15 +62,15 @@ TextureLoader.prototype.load = function (url, onLoad, _onProgress, onError) {
   return texture;
 };
 
-async function parse({ type, data }: ModelRequest) {
-  if (type !== 'fbx') return parseGltf(data); // GLTFLoader waits for its images and revokes its URLs
+async function parse({ type, data, files }: ModelRequest): Promise<{ scene: Object3D; animations: AnimationClip[] }> {
+  if (type !== 'fbx') return parseGltf(data, files); // GLTFLoader waits for its images and revokes its URLs
   const own: Reads = { loads: [], urls: [] };
   reads = own;
   try {
-    const object = new FBXLoader().parse(data, '');
+    const scene = new FBXLoader().parse(data, '');
     reads = null;
     await Promise.all(own.loads);
-    return object;
+    return { scene, animations: scene.animations };
   } finally {
     reads = null;
     for (const url of own.urls) URL.revokeObjectURL(url); // FBXLoader never revokes its own
@@ -81,7 +82,8 @@ self.onmessage = async (event: MessageEvent<ModelRequest>) => {
   let response: ModelResponse;
   let transfer: Transferable[] = [];
   try {
-    const serialized = serializeScene(await parse(event.data));
+    const { scene, animations } = await parse(event.data);
+    const serialized = serializeScene(scene, animations);
     response = { id, scene: serialized.scene };
     transfer = serialized.transfer;
   } catch (error) {

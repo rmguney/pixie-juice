@@ -45,10 +45,5 @@
     "typescript-eslint": "^8.18.1",
     "vite": "^6.0.5",
     "vitest": "^4.1.12"
-  },
-  "overrides": {
-    "minimatch": ">=9.0.0",
-    "picomatch": ">=4.0.2",
-    "flatted": ">=3.3.3"
   }
 }

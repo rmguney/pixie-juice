@@ -22,6 +22,20 @@
       }
     },
     {
+      "name": "fuzz",
+      "displayName": "libFuzzer harness with ASan + UBSan (clang)",
+      "inherits": "native",
+      "binaryDir": "${sourceDir}/../build/fuzz",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "PIXIE_BUILD_TESTS": "OFF",
+        "PIXIE_SANITIZE": "ON",
+        "PIXIE_FUZZ": "ON"
+      }
+    },
+    {
       "name": "wasm",
       "displayName": "WebAssembly (Emscripten)",
       "generator": "Ninja",
@@ -38,6 +52,7 @@
   "buildPresets": [
     { "name": "native", "configurePreset": "native" },
     { "name": "native-asan", "configurePreset": "native-asan" },
+    { "name": "fuzz", "configurePreset": "fuzz" },
     { "name": "wasm", "configurePreset": "wasm" }
   ],
   "testPresets": [

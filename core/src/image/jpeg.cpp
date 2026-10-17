@@ -24,6 +24,7 @@
 #include <cstring>
 
 #include <jpeglib.h>
+#include <jerror.h>
 
 namespace pixie::detail {
 
@@ -52,10 +53,21 @@ extern "C" void on_jpeg_error(j_common_ptr cinfo) {
 // Warnings would otherwise go to stderr, which is the browser console in WASM.
 extern "C" void on_jpeg_output(j_common_ptr) {}
 
+// libjpeg decodes past the end of the image data (at the end of the file, or
+// at a marker such as EOI) as if the rest of the image were blank, so a header
+// alone could claim 64 megapixels and have them all decoded: running out of
+// data is an error here. Other warnings are counted.
+extern "C" void on_jpeg_message(j_common_ptr cinfo, int level) {
+  if (level != -1) return;
+  if (cinfo->err->msg_code == JWRN_JPEG_EOF || cinfo->err->msg_code == JWRN_HIT_MARKER) on_jpeg_error(cinfo);
+  ++cinfo->err->num_warnings;
+}
+
 void init_errors(ErrorManager& manager) {
   jpeg_std_error(&manager.pub);
   manager.pub.error_exit = on_jpeg_error;
   manager.pub.output_message = on_jpeg_output;
+  manager.pub.emit_message = on_jpeg_message;
   manager.message[0] = '\0';
 }
 
@@ -311,7 +323,7 @@ bool decode(ByteView data, Image& image, std::string& error) {
   limit_scans(&cinfo, progress);
   jpeg_mem_src(&cinfo, data.data(), static_cast<unsigned long>(data.size()));
   jpeg_read_header(&cinfo, TRUE);
-  if (std::uint64_t(cinfo.image_width) * cinfo.image_height > kMaxPixels) {
+  if (!pixels_in_range(cinfo.image_width, cinfo.image_height)) {
     error = "JPEG dimensions too large";
     jpeg_destroy_decompress(&cinfo);
     return false;

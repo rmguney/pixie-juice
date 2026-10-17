@@ -18,6 +18,51 @@ TEST_CASE("detects images from their signatures") {
   CHECK(detect(text_bytes("<?xml version=\"1.0\"?>\n<svg xmlns=\"http://www.w3.org/2000/svg\"/>")) == Format::Svg);
 }
 
+TEST_CASE("detects HEIC and AVIF by their ftyp brands") {
+  // An ISO base media file type box: size, "ftyp", major brand, minor version, compatible brands.
+  auto ftyp = [](std::string_view major, std::string_view compatible) {
+    const auto size = std::uint8_t(16 + compatible.size());
+    Bytes box{0, 0, 0, size, 'f', 't', 'y', 'p'};
+    box.insert(box.end(), major.begin(), major.end());
+    box.insert(box.end(), 4, 0);
+    box.insert(box.end(), compatible.begin(), compatible.end());
+    box.insert(box.end(), {0, 0, 0, 8, 'm', 'e', 't', 'a'});
+    return box;
+  };
+  CHECK(detect(ftyp("heic", "mif1heic")) == Format::Heic);
+  CHECK(detect(ftyp("mif1", "mif1heic")) == Format::Heic);
+  CHECK(detect(ftyp("avif", "mif1avif")) == Format::Avif);
+  CHECK(detect(ftyp("mif1", "mif1avifmiaf")) == Format::Avif);
+  CHECK(detect(ftyp("isom", "isomiso2mp41")) == Format::Unknown);  // MP4 video
+  // The compact 'mif3' layout: the brand in the minor version's place, no compatible brands.
+  Bytes mif3{0, 0, 0, 16, 'f', 't', 'y', 'p', 'm', 'i', 'f', '3', 'a', 'v', 'i', 'f', 0, 0, 0, 8, 'm', 'i', 'n', 'i'};
+  CHECK(detect(mif3) == Format::Avif);
+  CHECK(kind_of(Format::Heic) == Kind::Image);
+  CHECK(format_from_name("heif") == Format::Heic);
+  CHECK(format_name(Format::Avif) == "avif");
+
+  // The core recognises them but has no codec for them: optimizing keeps the file.
+  const auto out = optimize(ftyp("avif", "mif1avif"), {});
+  REQUIRE(out.has_value());
+  CHECK_FALSE(out->changed);
+  CHECK(out->format == Format::Avif);
+  CHECK_FALSE(convert(ftyp("heic", "mif1heic"), Format::Png, {}).has_value());
+}
+
+TEST_CASE("convert_pixels converts pixels decoded elsewhere, and checks them") {
+  const auto image = fixtures::make_image(40, 30, 4, true);
+  const Pixels pixels{image.width, image.height, image.rgba};
+  const auto png = convert_pixels(pixels, {}, Format::Png, {.lossless = true});
+  REQUIRE(png.has_value());
+  CHECK(detect(png->data) == Format::Png);
+  CHECK(decode(png->data)->rgba == image.rgba);
+  CHECK_FALSE(convert_pixels(pixels, {}, Format::Jpeg, {.lossless = true}).has_value());
+  CHECK_FALSE(convert_pixels(Pixels{40, 31, image.rgba}, {}, Format::Png, {}).has_value());
+  CHECK_FALSE(convert_pixels(Pixels{0, 0, {}}, {}, Format::Png, {}).has_value());
+  CHECK_FALSE(convert_pixels(pixels, {}, Format::Svg, {}).has_value());
+  CHECK(to_srgb(pixels, {}).rgba == image.rgba);
+}
+
 TEST_CASE("detects meshes") {
   CHECK(detect(text_bytes("# cube\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n")) == Format::Obj);
   CHECK(detect(text_bytes("solid t\nfacet normal 0 0 1\nouter loop\nvertex 0 0 0\n")) == Format::Stl);

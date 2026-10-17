@@ -1,13 +1,13 @@
 import { Component, lazy, Suspense, useState, useEffect, useRef, type CSSProperties, type ReactNode } from 'react';
 import { getPixie } from '../core/client';
 import type { FilePreviewProps, ImageCompareProps } from '../types';
-import { extensionOf, isMeshExtension } from '../utils/files';
+import { extensionOf, fileKind, isMeshExtension } from '../utils/files';
 
 // three.js is only needed once a mesh is previewed.
 const MeshPreview = lazy(() => import('./MeshPreview'));
 
-/** Formats a browser <img> displays; TGA and TIFF go through the engine's decoder. */
-const BROWSER_IMAGES = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'ico', 'svg']);
+/** Formats a browser <img> displays; TGA, TIFF and HEIC go through the engine's decoders. */
+const BROWSER_IMAGES = new Set(['png', 'jpg', 'jpeg', 'webp', 'avif', 'gif', 'bmp', 'ico', 'svg']);
 
 type Preview = { kind: 'url'; url: string } | { kind: 'pixels'; image: ImageData };
 
@@ -148,10 +148,19 @@ function Loading({ children }: { children: string }) {
   );
 }
 
-export default function FilePreview({ file }: FilePreviewProps) {
+export default function FilePreview({ file, files }: FilePreviewProps) {
   const extension = extensionOf(file.name);
   const mesh = isMeshExtension(extension);
-  const { preview, error, fail } = useImagePreview(file, !mesh); // MeshPreview reads a mesh itself
+  const resource = fileKind(file.name) === 'resource';
+  const { preview, error, fail } = useImagePreview(file, !mesh && !resource); // MeshPreview reads a mesh itself
+
+  if (resource) {
+    return (
+      <div className="stage">
+        <p className="stage-message">Data for a .gltf in the list: it goes into the GLB, and its preview.</p>
+      </div>
+    );
+  }
 
   // Rendered for every mesh, so switching between meshes keeps one 3D view (and one WebGL context).
   if (mesh) {
@@ -159,7 +168,7 @@ export default function FilePreview({ file }: FilePreviewProps) {
       <div className="stage">
         <PreviewBoundary file={file}>
           <Suspense fallback={<Loading>Loading 3D preview…</Loading>}>
-            <MeshPreview file={file} type={extension} />
+            <MeshPreview file={file} type={extension} files={files} />
           </Suspense>
         </PreviewBoundary>
       </div>

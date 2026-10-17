@@ -3,20 +3,21 @@ import { openApp } from './helpers';
 
 test.beforeEach(async ({ page }) => openApp(page));
 
-for (const quality of [10, 50, 75, 90]) {
-  test(`PNG stays a lossless colour PNG at quality ${quality}`, async ({ page }) => {
-    const r = await page.evaluate(async (quality) => {
-      const input = await window.testing.makeImage({ width: 220, height: 160, mime: 'image/png', noise: 40 });
-      const out = await window.pixieJuice!.optimize(input, { quality });
-      return { inputSize: input.length, outputSize: out.data.length, format: out.format, ...(await window.testing.compare(input, out.data)) };
-    }, quality);
-    expect(r.format).toBe('png');
-    expect(r.outputSize).toBeLessThanOrEqual(r.inputSize);
-    expect(r.width).toBe(220);
-    expect(r.colourful).toBe(true);
-    expect(r.meanError).toBe(0);
+// PNG optimization is lossless whatever the quality setting: one quality covers it.
+test('PNG stays a lossless colour PNG', async ({ page }) => {
+  const r = await page.evaluate(async () => {
+    const input = await window.testing.makeImage({ width: 220, height: 160, mime: 'image/png', noise: 40 });
+    const out = await window.pixieJuice!.optimize(input, { quality: 10 });
+    return { inputSize: input.length, outputSize: out.data.length, format: out.format, ...(await window.testing.compare(input, out.data)) };
   });
+  expect(r.format).toBe('png');
+  expect(r.outputSize).toBeLessThanOrEqual(r.inputSize);
+  expect(r.width).toBe(220);
+  expect(r.colourful).toBe(true);
+  expect(r.meanError).toBe(0);
+});
 
+for (const quality of [10, 50, 75, 90]) {
   test(`JPEG stays a colour JPEG within budget at quality ${quality}`, async ({ page }) => {
     const r = await page.evaluate(async (quality) => {
       const input = await window.testing.makeImage({ width: 320, height: 240, mime: 'image/jpeg', quality: 0.95 });
@@ -214,4 +215,26 @@ test('converts to every target format', async ({ page }) => {
     expect(r.detected, target).toBe(`image:${target}`);
     expect(r.width, target).toBe(target === 'ico' ? 256 : 300);
   }
+});
+
+test('Resize scales larger images down in their own format, and conversions too', async ({ page }) => {
+  const r = await page.evaluate(async () => {
+    const api = window.pixieJuice!;
+    const png = await window.testing.makeImage({ width: 400, height: 200, mime: 'image/png' });
+    const scaled = await api.optimize(png, { maxSize: 100 });
+    const kept = await api.optimize(png, { maxSize: 1000 });
+    const converted = await api.convert(png, 'jpeg', { maxSize: 64 });
+    const size = async (data: Uint8Array) => {
+      const { width, height } = await window.testing.decode(data);
+      return [width, height];
+    };
+    return {
+      scaled: { format: scaled.format, size: await size(scaled.data) },
+      kept: await size(kept.changed ? kept.data : png),
+      converted: await size(converted.data),
+    };
+  });
+  expect(r.scaled).toEqual({ format: 'png', size: [100, 50] });
+  expect(r.kept).toEqual([400, 200]);
+  expect(r.converted).toEqual([64, 32]);
 });

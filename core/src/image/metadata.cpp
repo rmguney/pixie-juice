@@ -17,10 +17,6 @@ namespace {
 
 using namespace std::string_view_literals;
 
-bool starts_with(std::span<const std::uint8_t> data, std::string_view prefix) {
-  return data.size() >= prefix.size() && std::memcmp(data.data(), prefix.data(), prefix.size()) == 0;
-}
-
 /// JPEG: APP2 "ICC_PROFILE" segments (concatenated in sequence order) and the APP1 EXIF orientation.
 ColourInfo jpeg_info(ByteView data) {
   ColourInfo info;
@@ -167,11 +163,10 @@ std::string_view icc_colour_space(ByteView icc) {
   return icc.size() >= 20 ? std::string_view(reinterpret_cast<const char*>(icc.data()) + 16, 4) : std::string_view();
 }
 
-bool convert_to_srgb(Image& image, ByteView icc) {
-  if (icc.empty()) return true;
+void convert_to_srgb(Image& image, ByteView icc) {
+  if (icc.empty()) return;
   cmsHPROFILE source = cmsOpenProfileFromMem(icc.data(), cmsUInt32Number(icc.size()));
-  if (!source) return false;
-  bool ok = false;
+  if (!source) return;
   const cmsColorSpaceSignature space = cmsGetColorSpace(source);
   cmsHPROFILE srgb = cmsCreate_sRGBProfile();
   if (space == cmsSigRgbData) {
@@ -180,7 +175,6 @@ bool convert_to_srgb(Image& image, ByteView icc) {
     if (transform) {
       cmsDoTransform(transform, image.rgba.data(), image.rgba.data(), cmsUInt32Number(image.pixel_count()));
       cmsDeleteTransform(transform);
-      ok = true;
     }
   } else if (space == cmsSigGrayData) {
     // The pixels are grey (decoded with R = G = B): transform that one channel, keep alpha.
@@ -191,12 +185,10 @@ bool convert_to_srgb(Image& image, ByteView icc) {
       cmsDoTransform(transform, grey.data(), rgb.data(), cmsUInt32Number(grey.size()));
       cmsDeleteTransform(transform);
       for (std::size_t i = 0; i < grey.size(); ++i) std::memcpy(&image.rgba[i * 4], &rgb[i * 3], 3);
-      ok = true;
     }
   }
   cmsCloseProfile(srgb);
   cmsCloseProfile(source);
-  return ok;
 }
 
 }  // namespace pixie::detail

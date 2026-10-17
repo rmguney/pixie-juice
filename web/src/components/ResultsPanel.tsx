@@ -1,14 +1,14 @@
 import { useEffect, useRef } from 'react';
-import type { ResultsPanelProps, ProcessedResult } from '../types';
+import type { ProcessedSuccess, ResultsPanelProps } from '../types';
 import { outputNames } from '../utils/files';
+import { zip } from '../utils/zip';
 import { formatBytes, formatChange } from '../utils/format';
 import { outputFormat } from '../utils/outputFormat';
+import { resultFile } from '../utils/resultFile';
 import Icon from './Icon';
 
-type Success = Extract<ProcessedResult, { success: true }>;
-
-function download(result: Success, name: string) {
-  const url = URL.createObjectURL(new Blob([result.data as BlobPart], { type: outputFormat(result.format).mimeType }));
+function save(blob: Blob, name: string) {
+  const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
   link.download = name;
@@ -19,8 +19,13 @@ function download(result: Success, name: string) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-export default function ResultsPanel({ results, onReset }: ResultsPanelProps) {
-  const successful = results.filter((r): r is Success => r.success);
+/** Under `name`, unique within the batch (the file itself may be named alike to another). */
+function download(result: ProcessedSuccess, name: string) {
+  save(resultFile(result), name);
+}
+
+export default function ResultsPanel({ results, total, onReset }: ResultsPanelProps) {
+  const successful = results.filter((r): r is ProcessedSuccess => r.success);
   const failed = results.length - successful.length;
   const names = new Map(
     outputNames(successful.map((r) => ({ name: r.file.name, extension: outputFormat(r.format).extension }))).map(
@@ -28,9 +33,12 @@ export default function ResultsPanel({ results, onReset }: ResultsPanelProps) {
     ),
   );
 
-  // Staggered: browsers drop simultaneous programmatic downloads.
-  const downloadAll = () =>
-    successful.forEach((result, index) => setTimeout(() => download(result, names.get(result)!), index * 100));
+  // One file as it is; several as one ZIP (browsers block or ask about many downloads at once).
+  const downloadAll = () => {
+    if (successful.length === 1) return download(successful[0], names.get(successful[0])!);
+    save(zip(successful.map((result) => ({ name: names.get(result)!, data: result.data }))), 'pixie-juice.zip');
+  };
+  const notProcessed = total - results.length;
 
   // The panel replaces the one that had focus: move it here, so keyboard and
   // screen reader users land on the results.
@@ -59,6 +67,7 @@ export default function ResultsPanel({ results, onReset }: ResultsPanelProps) {
             </span>{' '}
             · {successful.length} file{successful.length === 1 ? '' : 's'} processed
             {failed > 0 && <span className="error-text"> · {failed} failed</span>}
+            {notProcessed > 0 && <> · {notProcessed} not processed (cancelled)</>}
           </p>
         </div>
       )}
@@ -107,7 +116,7 @@ export default function ResultsPanel({ results, onReset }: ResultsPanelProps) {
       <div className="actions">
         <button type="button" className="button primary" onClick={downloadAll} disabled={successful.length === 0}>
           <Icon name="download" />
-          Download all
+          {successful.length > 1 ? 'Download all (ZIP)' : 'Download'}
         </button>
         <button type="button" className="button" onClick={onReset}>
           Start over

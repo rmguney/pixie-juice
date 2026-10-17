@@ -26,7 +26,7 @@ declare global {
         alpha?: boolean;
         noise?: number;
       }): Promise<Uint8Array>;
-      /** Decodes with the browser, or with the engine for TIFF/TGA. */
+      /** Decodes with the browser, or with the engine for TIFF, TGA and HEIC. */
       decode(data: Uint8Array): Promise<{ width: number; height: number; data: Uint8ClampedArray }>;
       compare(a: Uint8Array, b: Uint8Array): Promise<PixelStats>;
       uncompressedTiff(width: number, height: number): Uint8Array;
@@ -38,7 +38,7 @@ declare global {
 function installPageHelpers() {
   const decode = async (data: Uint8Array) => {
     const kind = await window.pixieJuice!.detect(data);
-    if (kind === 'image:tiff' || kind === 'image:tga') {
+    if (kind === 'image:tiff' || kind === 'image:tga' || kind === 'image:heic') {
       const image = await window.pixieJuice!.decodeImage(data);
       return { width: image.width, height: image.height, data: image.rgba };
     }

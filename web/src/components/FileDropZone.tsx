@@ -1,11 +1,30 @@
 import { useState, useRef, useEffect } from 'react';
 import type { FileDropZoneProps } from '../types';
-import { IMAGE_EXTENSIONS, MESH_EXTENSIONS, extensionOf, fileKind } from '../utils/files';
+import { IMAGE_EXTENSIONS, MESH_EXTENSIONS, RESOURCE_EXTENSIONS, extensionOf, fileKind } from '../utils/files';
 import { formatBytes } from '../utils/format';
 import Icon from './Icon';
 
-const ACCEPT = [...IMAGE_EXTENSIONS, ...MESH_EXTENSIONS].map((ext) => `.${ext}`).join(',');
-const FORMATS = ['PNG', 'JPEG', 'WebP', 'GIF', 'BMP', 'TGA', 'TIFF', 'ICO', 'SVG', 'OBJ', 'STL', 'PLY', 'glTF', 'GLB', 'FBX'];
+const ACCEPT = [...IMAGE_EXTENSIONS, ...MESH_EXTENSIONS, ...RESOURCE_EXTENSIONS].map((ext) => `.${ext}`).join(',');
+const ICONS = { image: 'image', mesh: 'cube', resource: 'file' } as const;
+const FORMATS = ['PNG', 'JPEG', 'WebP', 'AVIF', 'HEIC', 'GIF', 'BMP', 'TGA', 'TIFF', 'ICO', 'SVG', 'OBJ', 'STL', 'PLY', 'glTF', 'GLB', 'FBX'];
+
+/** `name`, or "name-2.ext", "name-3.ext", ... when it is taken. */
+function freeName(name: string, taken: Set<string>): string {
+  if (!taken.has(name)) return name;
+  const dot = name.lastIndexOf('.');
+  const [base, extension] = dot > 0 ? [name.slice(0, dot), name.slice(dot)] : [name, ''];
+  for (let n = 2; ; n++) {
+    const candidate = `${base}-${n}${extension}`;
+    if (!taken.has(candidate)) return candidate;
+  }
+}
+
+/** Where pasting means text: left to the browser. */
+function isTextField(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable || target instanceof HTMLTextAreaElement) return true;
+  return target instanceof HTMLInputElement && !['file', 'range', 'checkbox', 'radio', 'button', 'submit'].includes(target.type);
+}
 
 export default function FileDropZone({ selectedFiles, setSelectedFiles, activeFile, onFileSelect }: FileDropZoneProps) {
   const [isDragging, setIsDragging] = useState(false);
@@ -41,6 +60,33 @@ export default function FileDropZone({ selectedFiles, setSelectedFiles, activeFi
     }
   };
 
+  // Pasting adds files too: an image copied from another app, or files copied in a file manager.
+  const handlePaste = useRef<(files: File[]) => void>(() => {});
+  useEffect(() => {
+    handlePaste.current = (files) => {
+      // The browser names copied image data itself ("image.png" every time), so a pasted
+      // file whose name is listed gets a free one instead of replacing that file.
+      const taken = new Set(selectedFiles.map((file) => file.name));
+      handleFiles(
+        files.map((file) => {
+          const name = freeName(file.name, taken);
+          taken.add(name);
+          return name === file.name ? file : new File([file], name, { type: file.type, lastModified: file.lastModified });
+        }),
+      );
+    };
+  });
+  useEffect(() => {
+    const paste = (event: ClipboardEvent) => {
+      const files = Array.from(event.clipboardData?.files ?? []);
+      if (files.length === 0 || isTextField(event.target)) return;
+      event.preventDefault();
+      handlePaste.current(files);
+    };
+    window.addEventListener('paste', paste);
+    return () => window.removeEventListener('paste', paste);
+  }, []);
+
   const remove = (file: File) => {
     // Focus moves to the next file (or the previous one) rather than being lost.
     const index = selectedFiles.indexOf(file);
@@ -70,7 +116,7 @@ export default function FileDropZone({ selectedFiles, setSelectedFiles, activeFi
       ref={zoneRef}
       role="button"
       tabIndex={0}
-      aria-label={empty ? 'Drop files here or click to browse' : 'Add files'}
+      aria-label={empty ? 'Drop files here, click to browse, or paste' : 'Add files'}
       className={empty ? 'dropzone' : 'dropzone compact'}
       data-dragging={isDragging || undefined}
       onClick={() => input.current?.click()}
@@ -99,7 +145,7 @@ export default function FileDropZone({ selectedFiles, setSelectedFiles, activeFi
             <Icon name="upload" size={20} />
           </span>
           <span className="dropzone-title">Drop files here</span>
-          <span className="dropzone-sub">or click to browse</span>
+          <span className="dropzone-sub">click to browse, or paste</span>
           <span className="dropzone-formats">
             {FORMATS.map((format) => (
               <span key={format}>{format}</span>
@@ -156,12 +202,13 @@ export default function FileDropZone({ selectedFiles, setSelectedFiles, activeFi
               onClick={() => onFileSelect(file)}
             >
               <span className="thumb">
-                <Icon name={fileKind(file.name) === 'mesh' ? 'cube' : 'image'} />
+                <Icon name={ICONS[fileKind(file.name) ?? 'image']} />
               </span>
               <span className="row-text">
                 <span className="row-name">{file.name}</span>
                 <span className="row-meta">
                   {formatBytes(file.size)} · {extensionOf(file.name).toUpperCase()}
+                  {fileKind(file.name) === 'resource' && ' · for a .gltf'}
                 </span>
               </span>
             </button>

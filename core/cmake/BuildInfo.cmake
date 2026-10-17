@@ -1,5 +1,5 @@
-# Generates generated/pixie/build_info.hpp on every build, so the timestamp and
-# the source hash always describe the binary that was actually produced.
+# Checks generated/pixie/build_info.hpp on every build, so the source hash always
+# describes the binary produced; it is rewritten only when the source changes.
 
 set(PIXIE_BUILD_INFO_HEADER ${CMAKE_CURRENT_BINARY_DIR}/generated/pixie/build_info.hpp)
 

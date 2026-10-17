@@ -24,10 +24,6 @@ namespace {
 constexpr std::size_t kZopfliMaxPixels = 256 * 1024;
 constexpr std::size_t kSignatureAndHeader = 8 + 25;  // PNG signature + IHDR chunk
 
-std::uint32_t be32(const std::uint8_t* p) {
-  return std::uint32_t(p[0]) << 24 | std::uint32_t(p[1]) << 16 | std::uint32_t(p[2]) << 8 | p[3];
-}
-
 std::optional<Bytes> run_zopflipng(const Bytes& input, bool use_zopfli, bool preserve_metadata) {
   ZopfliPNGOptions options;
   options.verbose = false;
@@ -48,19 +44,6 @@ std::optional<Bytes> run_zopflipng(const Bytes& input, bool use_zopfli, bool pre
   return result;
 }
 
-/// An acTL chunk before the first IDAT makes it an APNG.
-bool png_is_animated(ByteView input) {
-  std::size_t pos = 8;
-  while (pos + 8 <= input.size()) {
-    const std::uint32_t length = be32(input.data() + pos);
-    const auto* type = input.data() + pos + 4;
-    if (std::memcmp(type, "acTL", 4) == 0) return true;
-    if (std::memcmp(type, "IDAT", 4) == 0) return false;
-    if (length > input.size() - pos - 8 || input.size() - pos - 8 - length < 4) return false;
-    pos += 12 + std::size_t(length);
-  }
-  return false;
-}
 
 /// A grey profile that renders grey pixels exactly as the RGB profile renders
 /// R = G = B (its tone curve and the PCS white), or empty when no such profile
@@ -286,8 +269,22 @@ bool png_within_limits(ByteView data) {
 bool png_decodable(ByteView data) {
   unsigned width = 0, height = 0;
   lodepng::State state;
-  return lodepng_inspect(&width, &height, &state, data.data(), data.size()) == 0 && width && height &&
-         std::uint64_t(width) * height <= kMaxPixels && png_within_limits(data);
+  return lodepng_inspect(&width, &height, &state, data.data(), data.size()) == 0 && pixels_in_range(width, height) &&
+         png_within_limits(data);
+}
+
+/// An acTL chunk before the first IDAT makes it an APNG.
+bool png_is_animated(ByteView input) {
+  std::size_t pos = 8;
+  while (pos + 8 <= input.size()) {
+    const std::uint32_t length = be32(input.data() + pos);
+    const auto* type = input.data() + pos + 4;
+    if (std::memcmp(type, "acTL", 4) == 0) return true;
+    if (std::memcmp(type, "IDAT", 4) == 0) return false;
+    if (length > input.size() - pos - 8 || input.size() - pos - 8 - length < 4) return false;
+    pos += 12 + std::size_t(length);
+  }
+  return false;
 }
 
 }  // namespace pixie::detail

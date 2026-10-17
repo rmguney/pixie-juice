@@ -1,5 +1,6 @@
 // Encoders for conversions: BMP and TGA through stb_image_write, ICO as a
-// PNG-in-ICO container (resized with stb_image_resize2 to at most 256 px).
+// PNG-in-ICO container (at most 256 px). Resizing, for ICO and for a size
+// limit, through stb_image_resize2.
 
 #include "internal.hpp"
 
@@ -45,20 +46,37 @@ Result<Bytes> encode_bmp(const Image& image) { return encode_stb(image, stbi_wri
 /// Run-length encoded (stb_image_write's default).
 Result<Bytes> encode_tga(const Image& image) { return encode_stb(image, stbi_write_tga_to_func, "TGA"); }
 
-Result<Bytes> encode_ico(const Image& image) {
-  // ICO entries are at most 256 x 256: scale larger images down, keeping the aspect ratio.
-  const auto longest = std::max(image.width, image.height);
+namespace {
+
+/// The image scaled so its longest side is `longest` (smaller than it is), keeping the aspect ratio.
+std::optional<Image> scaled(const Image& image, std::uint32_t longest) {
+  const auto current = std::max(image.width, image.height);
   Image resized;
-  if (longest > 256) {
-    resized.width = std::max<std::uint32_t>(1, std::uint32_t(std::uint64_t(image.width) * 256 / longest));
-    resized.height = std::max<std::uint32_t>(1, std::uint32_t(std::uint64_t(image.height) * 256 / longest));
-    resized.rgba.resize(resized.pixel_count() * 4);
-    if (!stbir_resize_uint8_srgb(image.rgba.data(), int(image.width), int(image.height), 0, resized.rgba.data(),
-                                 int(resized.width), int(resized.height), 0, STBIR_RGBA)) {
-      return fail("ICO resize failed");
-    }
+  resized.width = std::max<std::uint32_t>(1, std::uint32_t(std::uint64_t(image.width) * longest / current));
+  resized.height = std::max<std::uint32_t>(1, std::uint32_t(std::uint64_t(image.height) * longest / current));
+  resized.rgba.resize(resized.pixel_count() * 4);
+  if (!stbir_resize_uint8_srgb(image.rgba.data(), int(image.width), int(image.height), 0, resized.rgba.data(),
+                               int(resized.width), int(resized.height), 0, STBIR_RGBA)) {
+    return std::nullopt;
   }
-  const Image& entry = longest > 256 ? resized : image;
+  return resized;
+}
+
+}  // namespace
+
+bool fit_within(Image& image, std::uint32_t max_size) {
+  if (max_size == 0 || std::max(image.width, image.height) <= max_size) return true;
+  auto resized = scaled(image, max_size);
+  if (!resized) return false;
+  image = std::move(*resized);
+  return true;
+}
+
+Result<Bytes> encode_ico(const Image& image) {
+  // ICO entries are at most 256 x 256: larger images are scaled down.
+  std::optional<Image> smaller;
+  if (std::max(image.width, image.height) > 256 && !(smaller = scaled(image, 256))) return fail("ICO resize failed");
+  const Image& entry = smaller ? *smaller : image;
   auto png = encode_png(entry);
   if (!png) return png;
 

@@ -12,7 +12,7 @@ describe('ResultsPanel', () => {
       { file: file('b.jpg', 500), success: true, data: new Uint8Array(500), format: 'jpeg', changed: false },
       { file: file('c.obj', 10), success: false, error: 'Unknown file format' },
     ];
-    render(<ResultsPanel results={results} onReset={vi.fn()} />);
+    render(<ResultsPanel results={results} total={3} onReset={vi.fn()} />);
 
     // 1500 B in, 900 B out across the two successes; a.png alone went from 1000 B to 400 B.
     expect(screen.getByText('−40%')).toBeInTheDocument();

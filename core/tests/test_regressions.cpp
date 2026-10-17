@@ -1,6 +1,6 @@
 // One test per bug found in review, so each stays fixed.
 
-#include "fixtures.hpp"
+#include "results.hpp"
 
 #include <doctest/doctest.h>
 #include <lcms2.h>
@@ -9,27 +9,11 @@
 
 using namespace pixie;
 using fixtures::as_text;
+using fixtures::lines_starting;
+using fixtures::optimized;
 using fixtures::text_bytes;
 
 namespace {
-
-Bytes result_of(const Bytes& input, const Options& options = {}) {
-  auto out = optimize(input, options);
-  REQUIRE(out.has_value());
-  return out->changed ? out->data : input;
-}
-
-std::size_t lines_starting(const Bytes& data, std::string_view prefix) {
-  std::size_t n = 0;
-  const auto text = as_text(data);
-  for (std::size_t pos = 0; pos < text.size();) {
-    if (text.substr(pos).starts_with(prefix)) ++n;
-    const auto end = text.find('\n', pos);
-    if (end == std::string_view::npos) break;
-    pos = end + 1;
-  }
-  return n;
-}
 
 /// A JPEG with an APP1 EXIF block carrying `orientation`.
 Bytes jpeg_with_orientation(const detail::Image& image, int orientation) {
@@ -116,7 +100,7 @@ TEST_CASE("PLY polygons with more than four corners are triangulated completely"
     const auto* tri = &mesh->mesh.indices[t * 3];
     CHECK((tri[0] != tri[1] && tri[1] != tri[2] && tri[0] != tri[2]));
   }
-  CHECK(as_text(result_of(ply)).find("element face 5") != std::string_view::npos);
+  CHECK(as_text(optimized(ply).data).find("element face 5") != std::string_view::npos);
 }
 
 TEST_CASE("non-finite coordinates and coloured binary STL pass through") {
@@ -143,8 +127,9 @@ TEST_CASE("conversions apply EXIF orientation") {
 
 TEST_CASE("JPEG optimization keeps the orientation as minimal EXIF") {
   const auto rotated = jpeg_with_orientation(fixtures::make_image(64, 32, 4), 8);
-  const auto out = result_of(rotated, {.quality = 60});
-  CHECK(detail::read_colour_info(out, Format::Jpeg).orientation == 8);
+  const auto out = optimized(rotated, {.quality = 60});
+  REQUIRE(out.changed);
+  CHECK(detail::read_colour_info(out.data, Format::Jpeg).orientation == 8);
 }
 
 TEST_CASE("conversions keep or apply the ICC profile") {
@@ -228,9 +213,10 @@ TEST_CASE("TIFF orientation is kept and applied for display") {
   // Display pixel (23, 0) is stored pixel (0, 0).
   CHECK(std::equal(image.rgba.begin(), image.rgba.begin() + 4, shown->rgba.begin() + 23 * 4));
 
-  const auto out = result_of(input);
-  CHECK(detail::read_colour_info(out, Format::Tiff).orientation == 6);
-  CHECK(decode(out)->rgba == shown->rgba);
+  const auto out = optimized(input);
+  REQUIRE(out.changed);
+  CHECK(detail::read_colour_info(out.data, Format::Tiff).orientation == 6);
+  CHECK(decode(out.data)->rgba == shown->rgba);
 }
 
 TEST_CASE("PNG optimization keeps EXIF orientation") {
@@ -249,7 +235,9 @@ TEST_CASE("PNG optimization keeps EXIF orientation") {
   std::free(chunk);
   REQUIRE(detail::read_colour_info(png, Format::Png).orientation == 3);
 
-  const auto out = result_of(png);
+  const auto result = optimized(png);
+  REQUIRE(result.changed);
+  const auto& out = result.data;
   CHECK(out.size() < png.size());
   CHECK(detail::read_colour_info(out, Format::Png).orientation == 3);
 }
@@ -261,13 +249,13 @@ TEST_CASE("glTF detection finds the asset property after embedded buffers") {
   CHECK(detect(text_bytes(json)) == Format::Gltf);
 }
 
-TEST_CASE("glTF that references external files is refused instead of read from disk") {
-  for (const char* json : {R"({"asset":{"version":"2.0"},"buffers":[{"byteLength":4,"uri":"secret.bin"}]})",
-                           R"({"asset":{"version":"2.0"},"images":[{"uri":"../../photo.png"}]})"}) {
-    const auto result = optimize(text_bytes(json), {});
-    REQUIRE_FALSE(result.has_value());
-    CHECK(result.error().message.find("external") != std::string::npos);
-  }
+TEST_CASE("glTF that references files not given is refused instead of read from disk") {
+  const auto missing = optimize(text_bytes(R"({"asset":{"version":"2.0"},"buffers":[{"byteLength":4,"uri":"secret.bin"}]})"), {});
+  REQUIRE_FALSE(missing.has_value());
+  CHECK(missing.error().message.find("needs secret.bin") != std::string::npos);
+  const auto outside = optimize(text_bytes(R"({"asset":{"version":"2.0"},"images":[{"uri":"../../photo.png"}]})"), {});
+  REQUIRE_FALSE(outside.has_value());
+  CHECK(outside.error().message.find("outside its folder") != std::string::npos);
 }
 
 TEST_CASE("temporary files have distinct names and are created up front") {
