@@ -1,6 +1,6 @@
 // Parses glTF/GLB and FBX for the 3D preview with three.js's loaders, off the
 // main thread so a large model doesn't freeze the page. The scene goes back as
-// plain data with its buffers and image bitmaps (see sceneTransfer.ts).
+// plain data with its buffers and encoded images (see sceneTransfer.ts).
 
 // The loaders are imported statically: a dynamic import() from a module worker
 // made WebKit evaluate a second copy of three.js, whose objects then failed
@@ -16,54 +16,64 @@ import type { ModelRequest, ModelResponse } from './modelProtocol';
 // size (cameras), which a worker doesn't have.
 (globalThis as { window?: unknown }).window ??= { URL, innerWidth: 1, innerHeight: 1 };
 
-/** Texture loads of the file being parsed: FBXLoader returns its scene before they finish. */
-let textureLoads: Promise<void>[] = [];
+/** The image reads an FBX starts while it is parsed, and the object URLs they read. */
+interface Reads {
+  loads: Promise<void>[];
+  urls: string[];
+}
+/** Set only while FBXLoader parses: it starts its image reads synchronously and doesn't wait for them. */
+let reads: Reads | null = null;
 
-// FBXLoader loads its textures with TextureLoader, which needs the DOM. Here
-// they are decoded to ImageBitmaps instead, flipped later like any texture
-// whose flipY is set (see serializeScene). Only textures embedded in the file
-// (blob: and data: URLs) are read: fetching the paths a file names would leak
-// that it was opened, to this site or another, like the glTF check in gltf.ts.
-TextureLoader.prototype.load = function (url, onLoad, onProgress, onError) {
-  const texture = new Texture();
+// Texture images are read here as the encoded files they are and decoded on
+// the page (see deserializeScene): ImageBitmaps decoded in a worker and
+// transferred came out garbled in WebKit on Linux. Only images embedded in the
+// file (blob: and data: URLs) are read: fetching the paths a file names would
+// leak that it was opened, to this site or another, like the glTF check in gltf.ts.
+function readImage(url: string, onLoad: (image: Blob) => void, onError?: (error: unknown) => void) {
   if (!url.startsWith('blob:') && !url.startsWith('data:')) {
     onError?.(new Error(`not embedded in the file: ${url}`));
-    return texture;
+    return;
   }
-  textureLoads.push(
-    new Promise<void>((settle) => {
-      const done = () => {
-        if (url.startsWith('blob:')) URL.revokeObjectURL(url); // FBXLoader never revokes its own
-        settle();
-      };
-      new ImageBitmapLoader(this.manager)
-        .setOptions({ imageOrientation: 'none', premultiplyAlpha: 'none' })
-        .setCrossOrigin(this.crossOrigin)
-        .load(
-          url,
-          (bitmap) => {
-            texture.image = bitmap;
-            texture.needsUpdate = true;
-            onLoad?.(texture);
-            done();
-          },
-          onProgress,
-          (error) => {
-            onError?.(error);
-            done();
-          },
-        );
-    }),
+  const load = fetch(url)
+    .then((response) => response.blob())
+    .then(onLoad, (error: unknown) => onError?.(error));
+  reads?.loads.push(load);
+  if (url.startsWith('blob:')) reads?.urls.push(url);
+}
+
+// GLTFLoader reads images with ImageBitmapLoader (with TextureLoader where it
+// distrusts ImageBitmap), FBXLoader with TextureLoader. Both need decoding the
+// worker leaves to the page, so either gets the encoded image instead.
+ImageBitmapLoader.prototype.load = function (url, onLoad, _onProgress, onError) {
+  readImage(url, (image) => onLoad?.(image as unknown as ImageBitmap), onError);
+};
+
+TextureLoader.prototype.load = function (url, onLoad, _onProgress, onError) {
+  const texture = new Texture();
+  readImage(
+    url,
+    (image) => {
+      texture.image = image;
+      onLoad?.(texture);
+    },
+    onError,
   );
   return texture;
 };
 
 async function parse({ type, data }: ModelRequest) {
-  textureLoads = [];
-  // FBXLoader starts its texture loads while parsing (synchronously), so the list is this file's.
-  const object = type === 'fbx' ? new FBXLoader().parse(data, '') : await parseGltf(data);
-  await Promise.all(textureLoads);
-  return object;
+  if (type !== 'fbx') return parseGltf(data); // GLTFLoader waits for its images and revokes its URLs
+  const own: Reads = { loads: [], urls: [] };
+  reads = own;
+  try {
+    const object = new FBXLoader().parse(data, '');
+    reads = null;
+    await Promise.all(own.loads);
+    return object;
+  } finally {
+    reads = null;
+    for (const url of own.urls) URL.revokeObjectURL(url); // FBXLoader never revokes its own
+  }
 }
 
 self.onmessage = async (event: MessageEvent<ModelRequest>) => {
@@ -71,7 +81,7 @@ self.onmessage = async (event: MessageEvent<ModelRequest>) => {
   let response: ModelResponse;
   let transfer: Transferable[] = [];
   try {
-    const serialized = await serializeScene(await parse(event.data));
+    const serialized = serializeScene(await parse(event.data));
     response = { id, scene: serialized.scene };
     transfer = serialized.transfer;
   } catch (error) {

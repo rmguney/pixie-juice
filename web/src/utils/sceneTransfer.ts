@@ -1,6 +1,7 @@
 // A three.js scene as plain data that can cross to another thread: the model
 // worker parses a file and serializes the result; the page rebuilds it. Buffers
-// and image bitmaps are transferred, not copied. Meshes, points and lines keep
+// are transferred, not copied; images cross as the encoded files they were (a
+// Blob shares its bytes) and are decoded on the page. Meshes, points and lines keep
 // their geometry, materials (with textures) and the node hierarchy; cameras,
 // lights, skeletons and animations are left out of the preview.
 
@@ -74,7 +75,8 @@ export interface SceneData {
   geometries: GeometryData[];
   materials: MaterialData[];
   textures: TextureData[];
-  images: ImageBitmap[];
+  /** Encoded images (PNG, JPEG, ...), one per three.js Source. */
+  images: Blob[];
 }
 
 const MATERIALS: Record<string, new () => Material> = {
@@ -91,7 +93,7 @@ const MATERIALS: Record<string, new () => Material> = {
 /** Texture settings worth carrying; the image itself travels separately. */
 const TEXTURE_KEYS = [
   'name', 'mapping', 'channel', 'wrapS', 'wrapT', 'magFilter', 'minFilter', 'anisotropy', 'offset', 'repeat',
-  'center', 'rotation', 'generateMipmaps', 'premultiplyAlpha', 'colorSpace',
+  'center', 'rotation', 'generateMipmaps', 'flipY', 'premultiplyAlpha', 'colorSpace',
 ] as const;
 
 /** Material fields that describe the object, not its appearance. */
@@ -107,18 +109,17 @@ function kindOf(node: Object3D): NodeKind {
   return 'group';
 }
 
-/** Collects a scene into SceneData and the buffers and bitmaps to transfer with it. */
-export async function serializeScene(root: Object3D): Promise<{ scene: SceneData; transfer: Transferable[] }> {
+/** Collects a scene into SceneData and the buffers to transfer with it. */
+export function serializeScene(root: Object3D): { scene: SceneData; transfer: Transferable[] } {
   const geometries: GeometryData[] = [];
   const materials: MaterialData[] = [];
   const textures: TextureData[] = [];
-  const images: ImageBitmap[] = [];
+  const images: Blob[] = [];
   const geometryIds = new Map<BufferGeometry, number>();
   const materialIds = new Map<Material, number>();
   const textureIds = new Map<Texture, number>();
-  // One image per three.js Source (and orientation): clones that share one stay one upload.
-  const imageIds = new Map<Source, { straight?: number; flipped?: number }>();
-  const flippedOnly = new Set<ImageBitmap>();
+  // One image per three.js Source: clones that share one stay one image.
+  const imageIds = new Map<Source, number>();
   const transfer = new Set<Transferable>();
 
   function attribute(source: BufferGeometry['attributes'][string]): AttributeData {
@@ -148,28 +149,22 @@ export async function serializeScene(root: Object3D): Promise<{ scene: SceneData
     return id;
   }
 
-  /** The index of the texture's image, flipped if the texture asks for it. */
-  async function image(source: Texture): Promise<number | undefined> {
-    const original: unknown = source.image;
-    if (!(typeof ImageBitmap !== 'undefined' && original instanceof ImageBitmap)) return undefined; // compressed or failed
-    const ids = imageIds.get(source.source) ?? {};
-    imageIds.set(source.source, ids);
-    const variant = source.flipY ? 'flipped' : 'straight';
-    if (ids[variant] === undefined) {
-      // WebGL can't flip an ImageBitmap on upload, so a texture that expects it gets flipped pixels.
-      const bitmap = source.flipY ? await createImageBitmap(original, { imageOrientation: 'flipY' }) : original;
-      if (source.flipY && ids.straight === undefined) flippedOnly.add(original);
-      if (!source.flipY) flippedOnly.delete(original);
-      transfer.add(bitmap);
-      ids[variant] = images.push(bitmap) - 1;
+  /** The index of the texture's encoded image (see modelWorker.ts). */
+  function image(source: Texture): number | undefined {
+    const encoded: unknown = source.image;
+    if (!(encoded instanceof Blob)) return undefined; // compressed, or not read
+    let id = imageIds.get(source.source);
+    if (id === undefined) {
+      id = images.push(encoded) - 1;
+      imageIds.set(source.source, id);
     }
-    return ids[variant];
+    return id;
   }
 
-  async function texture(source: Texture): Promise<number | undefined> {
+  function texture(source: Texture): number | undefined {
     let id = textureIds.get(source);
     if (id !== undefined) return id;
-    const index = await image(source);
+    const index = image(source);
     if (index === undefined) return undefined;
     const values: Record<string, Value> = {};
     for (const key of TEXTURE_KEYS) values[key] = plain(source[key]) ?? null;
@@ -178,7 +173,7 @@ export async function serializeScene(root: Object3D): Promise<{ scene: SceneData
     return id;
   }
 
-  async function material(source: Material): Promise<number> {
+  function material(source: Material): number {
     let id = materialIds.get(source);
     if (id === undefined) {
       const values: Record<string, Value> = {};
@@ -188,7 +183,7 @@ export async function serializeScene(root: Object3D): Promise<{ scene: SceneData
         if (SKIPPED_MATERIAL_KEYS.has(key) || !(key in source)) continue;
         const value: unknown = (source as unknown as Record<string, unknown>)[key];
         if ((value as Texture | null)?.isTexture === true) {
-          const index = await texture(value as Texture);
+          const index = texture(value as Texture);
           if (index !== undefined) values[key] = { texture: index };
         } else {
           const simple = plain(value);
@@ -201,19 +196,13 @@ export async function serializeScene(root: Object3D): Promise<{ scene: SceneData
     return id;
   }
 
-  async function node(source: Object3D): Promise<NodeData> {
+  function node(source: Object3D): NodeData {
     source.updateMatrix();
     const data: NodeData = { kind: kindOf(source), name: source.name, matrix: source.matrix.toArray(), children: [] };
     if (data.kind !== 'group') {
       const drawable = source as Mesh;
       data.geometry = geometry(drawable.geometry);
-      // One material at a time, so ones sharing a texture find it already serialized.
-      if (Array.isArray(drawable.material)) {
-        data.material = [];
-        for (const each of drawable.material) data.material.push(await material(each));
-      } else {
-        data.material = await material(drawable.material);
-      }
+      data.material = Array.isArray(drawable.material) ? drawable.material.map(material) : material(drawable.material);
     }
     if (data.kind === 'instancedMesh') {
       const { count, instanceMatrix, instanceColor } = source as InstancedMesh;
@@ -221,13 +210,11 @@ export async function serializeScene(root: Object3D): Promise<{ scene: SceneData
       transfer.add(matrices.buffer as ArrayBuffer);
       data.instances = { count, matrices, colors: instanceColor ? attribute(instanceColor) : undefined };
     }
-    for (const child of source.children) data.children.push(await node(child));
+    data.children = source.children.map(node);
     return data;
   }
 
-  const scene: SceneData = { root: await node(root), geometries, materials, textures, images };
-  // Originals only ever used flipped aren't sent: free them now rather than at collection.
-  for (const original of flippedOnly) original.close();
+  const scene: SceneData = { root: node(root), geometries, materials, textures, images };
   return { scene, transfer: [...transfer] };
 }
 
@@ -241,7 +228,7 @@ function plain(value: unknown): Value | undefined {
 }
 
 /** Applies serialized values to a three.js object, skipping any it doesn't have. */
-function assign(target: object, values: Record<string, Value>, textures: Texture[]) {
+function assign(target: object, values: Record<string, Value>, textures: (Texture | null)[]) {
   const fields = target as Record<string, unknown>;
   for (const [key, value] of Object.entries(values)) {
     if (!(key in target)) continue;
@@ -256,17 +243,39 @@ function assign(target: object, values: Record<string, Value>, textures: Texture
   }
 }
 
-/** Rebuilds a scene from SceneData. */
-export function deserializeScene({ root, geometries, materials, textures, images }: SceneData): Object3D {
-  const sources = images.map((image) => new Source(image));
-  const builtTextures = textures.map(({ image, values }) => {
-    const texture = new Texture();
-    texture.source = sources[image];
-    assign(texture, values, []);
-    texture.flipY = false; // already oriented (see serializeScene)
-    texture.needsUpdate = true;
-    return texture;
-  });
+/** Rebuilds a scene from SceneData, decoding its images. */
+export async function deserializeScene({ root, geometries, materials, textures, images }: SceneData): Promise<Object3D> {
+  // WebGL neither flips an ImageBitmap nor changes its alpha on upload, so an
+  // image is decoded the way its textures ask; textures asking alike share one.
+  const sources = new Map<string, Promise<Source | null>>();
+  function decoded(image: number, flipY: boolean, premultiply: boolean): Promise<Source | null> {
+    const key = `${image} ${flipY} ${premultiply}`;
+    let source = sources.get(key);
+    if (!source) {
+      source = createImageBitmap(images[image], {
+        imageOrientation: flipY ? 'flipY' : 'from-image',
+        premultiplyAlpha: premultiply ? 'premultiply' : 'none',
+        colorSpaceConversion: 'none',
+      }).then(
+        (bitmap) => new Source(bitmap),
+        () => null, // an image the browser can't decode leaves its textures out
+      );
+      sources.set(key, source);
+    }
+    return source;
+  }
+  const builtTextures = await Promise.all(
+    textures.map(async ({ image, values }) => {
+      const source = await decoded(image, values.flipY === true, values.premultiplyAlpha === true);
+      if (!source) return null;
+      const texture = new Texture();
+      texture.source = source;
+      assign(texture, values, []);
+      texture.flipY = false; // decoded the right way up
+      texture.needsUpdate = true;
+      return texture;
+    }),
+  );
   const builtMaterials = materials.map(({ type, values }) => {
     const material = new (MATERIALS[type] ?? MeshStandardMaterial)();
     assign(material, values, builtTextures);
