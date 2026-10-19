@@ -34,7 +34,7 @@ web/ (React UI) ──postMessage──▶ workers ──Embind──▶ pixie_c
 ```
 
 - **Engine (`core/`).** The libraries do the encoding; the engine asks each for candidates, verifies them and keeps the smallest. An image candidate must decode at the same size with the same transparency, colour and orientation, within a pixel-error budget set by quality (exact in Lossless mode). OBJ, STL and PLY must keep exactly the same triangles unless simplifying; glTF is accepted on size.
-- **Hostile input.** Decoders check dimensions against a 64-megapixel cap, and files that couldn't hold the image they claim are refused. Tests run every format's truncated and corrupted files under ASan, LSan and UBSan, and [libFuzzer](core/fuzz/README.md) runs the whole API nightly.
+- **Hostile input.** Decoders check dimensions against a 64-megapixel cap, and files that couldn't hold the image they claim are refused. Tests run every format's truncated and corrupted files under ASan, LSan and UBSan, and [libFuzzer](core/fuzz/README.md) runs the whole API whenever the engine changes.
 - **Web app (`web/`).** Up to four engine workers process a batch in parallel, stop when idle, and stop at once when a run is cancelled. three.js, SVGO and the HEIC module load on demand. A service worker keeps the app and the engine for offline use, and each on-demand part once used. The page runs under a strict Content Security Policy.
 - **3D preview.** Every model is parsed off the main thread: OBJ, STL and PLY by the engine (triangles, lines or point clouds), glTF and FBX by three.js's loaders in a worker (meshopt, Draco and KTX2 included). Cameras, lights and animation come along; the first animation plays.
 

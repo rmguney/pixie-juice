@@ -4,7 +4,7 @@
 
 `seeds.cpp` writes the starting corpus: small valid files of every format, each behind the mode bytes that exercise it.
 
-CI runs it every night for 30 minutes (`.github/workflows/fuzz.yml`), keeping the corpus between runs. A crash fails the run and uploads the input that caused it. To reproduce one locally (Linux or macOS, clang):
+CI runs it for 30 minutes whenever `core/` changes on `main`, or on demand (`.github/workflows/fuzz.yml`), keeping the corpus between runs. A crash fails the run and uploads the input that caused it. To reproduce one locally (Linux or macOS, clang 19 or later; with libstdc++, older clang has no `std::expected`):
 
 ```sh
 cmake --preset fuzz && cmake --build --preset fuzz

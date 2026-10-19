@@ -84,6 +84,8 @@ set(MOZJPEG_ARGS
   -DWITH_CRT_DLL=ON)         # match the default /MD runtime on MSVC
 if(CMAKE_TOOLCHAIN_FILE)
   list(APPEND MOZJPEG_ARGS "-DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}")
+else()  # this build's compiler, which the flags above are written for (a preset's clang isn't the default cc)
+  list(APPEND MOZJPEG_ARGS "-DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}")
 endif()
 if(CMAKE_MSVC_RUNTIME_LIBRARY)  # a C runtime chosen for this build applies to mozjpeg too
   list(APPEND MOZJPEG_ARGS -DCMAKE_POLICY_DEFAULT_CMP0091=NEW "-DCMAKE_MSVC_RUNTIME_LIBRARY=${CMAKE_MSVC_RUNTIME_LIBRARY}")

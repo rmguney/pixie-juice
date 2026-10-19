@@ -62,7 +62,7 @@ TEST_CASE("corrupted files never crash") {
         const std::size_t at = seed % corrupted.size();
         corrupted[at] = std::uint8_t(corrupted[at] ^ (1u << (seed >> 29)));
       }
-      // Optimizing mostly re-encodes what still decodes; the nightly fuzzer covers it further.
+      // Optimizing mostly re-encodes what still decodes; the fuzzer covers it further.
       exercise(corrupted, round % 8 == 0);
     }
   }
